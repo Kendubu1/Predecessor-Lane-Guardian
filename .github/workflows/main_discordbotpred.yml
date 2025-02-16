@@ -31,8 +31,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
-      
       - name: Create deployment package
         run: |
           zip release.zip ./* -r \
@@ -72,3 +70,9 @@ jobs:
           app-name: 'discordbotpred'
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_7A68373260BB41AA9B3EC5F6F3B7443A }}
+          startup-command: |
+            apt-get update && \
+            apt-get install -y ffmpeg && \
+            python -m pip install --upgrade pip && \
+            pip install -r requirements.txt && \
+            python main.py
