@@ -1,6 +1,6 @@
 import os
 import logging
-import asyncio
+from health_check import HealthCheck
 from datetime import datetime, timedelta
 from typing import Optional, Set
 import discord
@@ -86,6 +86,10 @@ class PredecessorBot(commands.Bot):
             # Add game commands
             self.tree.add_command(GameCommands(self))
             
+            # Start health check server
+            self.health_check = HealthCheck(self, port=8080)
+            await self.health_check.start()
+    
             # Sync command tree
             await self.tree.sync()
             logger.info("Command tree synced successfully")
