@@ -6,7 +6,7 @@ from datetime import datetime
 logger = logging.getLogger('PredTimer.HealthCheck')
 
 class HealthCheck:
-    def __init__(self, bot, port=8080):
+    def __init__(self, bot, port=8000):
         self.bot = bot
         self.port = port
         self.start_time = datetime.now()
