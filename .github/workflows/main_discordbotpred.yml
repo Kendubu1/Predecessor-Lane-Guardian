@@ -72,7 +72,3 @@ jobs:
           app-name: 'discordbotpred'
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_7A68373260BB41AA9B3EC5F6F3B7443A }}
-          startup-command: |
-            python -m pip install --upgrade pip
-            pip install -r requirements.txt
-            python main.py
