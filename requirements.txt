@@ -3,3 +3,4 @@ gTTS
 ffmpeg-python
 PyNaCl
 python-dotenv
+aiohttp>=3.8.0
