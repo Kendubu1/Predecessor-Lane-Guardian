@@ -15,6 +15,7 @@ Lane Guardian is a Discord bot designed to help Predecessor players track import
 ## Quick Start Guide (How Not to Throw Your Games) 🚀
 
 To make the most of your Lane Guardian do the following...
+0. https://discord.com/oauth2/authorize?client_id=1339385702151884800&permissions=293171527744&scope=bot%20applications.commands
 
 1. **Before You Int (Pre-Match Setup)**
    - Jump into a voice channel
