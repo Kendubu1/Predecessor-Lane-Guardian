@@ -20,7 +20,7 @@ To make the most of your Lane Guardian do the following...
 1. **Before You Int (Pre-Match Setup)**
    - Jump into a voice channel
    - `/pred settings` - Make sure your bot isn't speaking in cursed tongues
-   - `/pred test_voice` - Check if the volume is perfect for your precious ears or just mess with your friends
+   - `/pred say` - Check if the volume is perfect for your precious ears or just mess with your friends
    - `/pred tts_set` - Mess with the tts voice language & accent.
    - `/pred list_timers ` - Review all the existing timers in place by default
    - `/pred export_config` & `/pred import_config` - Make any edits of the TTS voice lines in place!
