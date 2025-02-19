@@ -1,19 +1,29 @@
-import base64
-import json
+# Standard library imports
 import os
+import json
+import asyncio
+import logging
 import tempfile
+import base64
+from datetime import datetime, timedelta
+from typing import Optional, List, Set
+
+# Discord imports
 import discord
 from discord import app_commands
-from typing import Optional, List
-import logging
-import asyncio
+
+# Local imports
+from health_check import HealthCheck
 from config import (
-    TimerCategory, 
-    TTSLanguage, 
-    TTSAccent, 
-    TTSSpeed, 
+    ConfigManager,
+    TimerCategory,
+    TTSLanguage,
+    TTSAccent,
+    TTSSpeed,
     VALID_LANG_ACCENT_PAIRS
 )
+from services import TTSService, VoiceService
+
 
 logger = logging.getLogger('PredTimer.Commands')
 
@@ -23,6 +33,15 @@ class GameCommands(app_commands.Group):
     def __init__(self, bot):
         super().__init__(name="pred", description="pred game timer commands")
         self.bot = bot
+        
+        # Log all registered commands
+        logger.info("Registering bot commands:")
+        # Get all methods that are commands
+        for name, method in self.__class__.__dict__.items():
+            if isinstance(method, app_commands.Command):
+                logger.info(f"  /pred {method.name} - {method.description}")
+        
+        logger.info("GameCommands initialization complete")
 
     async def check_permissions(self, interaction: discord.Interaction) -> bool:
         """Check if user has permission to use admin commands."""
@@ -757,51 +776,55 @@ class GameCommands(app_commands.Group):
                 ephemeral=True
             )
 
-    @app_commands.command(name="test_voice")
-    async def test_voice(self, interaction: discord.Interaction, message: Optional[str] = None):
-        """Test the current TTS voice settings."""
+    @app_commands.command(name="ping")
+    async def ping(self, interaction: discord.Interaction):
+        """Simple test command to verify the bot is working."""
+        await interaction.response.send_message("Pong! Bot is working", ephemeral=True)
+
+    # Add this after your other commands in the GameCommands class
+
+    @app_commands.command(name="say")
+    @app_commands.describe(
+        message="Message to speak through TTS",
+        ephemeral="Whether to show the command response only to you"
+    )
+    async def say(self, 
+                interaction: discord.Interaction, 
+                message: str,
+                ephemeral: bool = True):
+        """Say a message through TTS."""
         try:
-            # Check if timer is active
-            if self.bot.timer.is_active:
+            if not interaction.user.voice:
                 await interaction.response.send_message(
-                    "Cannot test TTS while game timer isrunning. Stop the timer first!", 
+                    "You need to be in a voice channel!", 
                     ephemeral=True
                 )
-                return
-
-            if not interaction.user.voice:
-                await interaction.response.send_message("You need to be in a voice channel!")
                 return
 
             voice_channel = interaction.user.voice.channel
             voice_client = await self.bot.voice_service.ensure_voice_client(voice_channel)
             
-            # Use default test message if none provided
-            test_message = message or "This is a test of the current voice settings for Predecessor Timer"
-            
-            await interaction.response.send_message("Playing test message...")
-            
-            # Get server settings and play test message
+            # Get server settings and play message
             config = self.bot.config_manager.get_server_config(interaction.guild.id)
+            
+            # Send response before playing
+            await interaction.response.send_message(
+                f"Playing: {message}", 
+                ephemeral=ephemeral
+            )
+            
             await self.bot.voice_service.play_announcement(
                 voice_client,
-                test_message,
+                message,
                 config['settings']
             )
             
-            # Cleanup after test
-            await asyncio.sleep(5)  # Wait for message to finish
-            if not self.bot.timer.is_active:  # Only disconnect if timer isn't running
-                await self.bot.voice_service.cleanup_voice_clients(interaction.guild)
-            
         except Exception as e:
-            logger.error(f"Error in test_voice: {e}")
-            await interaction.response.send_message(f"Error testing voice: {str(e)}")
-
-    # @app_commands.command(name="ping")
-    # async def ping(self, interaction: discord.Interaction):
-    #     """Simple test command to verify the bot is working."""
-    #     await interaction.response.send_message("Pong! Bot is working", ephemeral=True)
+            logger.error(f"Error in say command: {e}")
+            await interaction.response.send_message(
+                f"Error playing message: {str(e)}", 
+                ephemeral=True
+            )
 
     @list_timers.autocomplete('category')
     async def category_autocomplete(self, 
@@ -827,3 +850,5 @@ class GameCommands(app_commands.Group):
             app_commands.Choice(name=cat, value=cat)
             for cat in filtered[:25]  # Discord limits to 25 choices
         ]
+    
+    

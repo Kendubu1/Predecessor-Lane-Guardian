@@ -1,16 +1,22 @@
+# Standard library imports
 import os
 import logging
 import random
-from health_check import HealthCheck
 from datetime import datetime, timedelta
 from typing import Optional, Set
+
+# Discord imports
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+# Local imports
+from health_check import HealthCheck
 from config import ConfigManager
 from services import TTSService, VoiceService
 from commands import GameCommands
+
 
 # Configure logging
 logging.basicConfig(
@@ -83,38 +89,41 @@ class PredecessorBot(commands.Bot):
         logger.info("PredecessorBot initialized")
 
     async def setup_hook(self) -> None:
-        """Set up the bot's initial state and start background tasks."""
-        try:
-            # Add game commands
-            logger.info("Adding game commands group...")
-            game_commands = GameCommands(self)
-            self.tree.add_command(game_commands)
-            
-            # Start health check server
-            logger.info("Starting health check server...")
-            self.health_check = HealthCheck(self, port=8081)
-            await self.health_check.start()
-    
-            # Sync command tree with verbose logging
-            logger.info("Starting command sync...")
+            """Set up the bot's initial state and start background tasks."""
             try:
-                synced = await self.tree.sync()
-                logger.info(f"Synced {len(synced)} commands")
-                for command in synced:
-                    logger.info(f"Synced command: {command.name}")
+                # Add game commands
+                logger.info("Adding game commands...")
+                game_commands = GameCommands(self)
+                self.tree.add_command(game_commands)
+                
+                # Log all commands in the tree
+                logger.info("Available commands in tree:")
+                for command in self.tree.get_commands():
+                    logger.info(f"/{command.name}")
+                    # If it's a group, log its subcommands
+                    if isinstance(command, app_commands.Group):
+                        for subcmd in command.commands:
+                            logger.info(f"  /{command.name} {subcmd.name} - {subcmd.description}")
+                
+                # Start health check server
+                logger.info("Starting health check server...")
+                self.health_check = HealthCheck(self, port=8081)
+                await self.health_check.start()
+        
+                # Sync command tree
+                logger.info("Syncing commands...")
+                await self.tree.sync()
+                logger.info("Command sync complete")
+                
+                # Start background tasks
+                logger.info("Starting background tasks...")
+                self.check_timers.start()
+                
+                logger.info("Setup complete!")
+                
             except Exception as e:
-                logger.error(f"Error syncing commands: {e}")
+                logger.error(f"Error in setup_hook: {e}", exc_info=True)
                 raise
-            
-            # Start background tasks
-            logger.info("Starting background tasks...")
-            self.check_timers.start()
-            
-            logger.info("Setup complete!")
-            
-        except Exception as e:
-            logger.error(f"Error in setup_hook: {e}", exc_info=True)
-            raise
 
     async def on_ready(self):
         """Called when the bot is ready and connected to Discord."""
