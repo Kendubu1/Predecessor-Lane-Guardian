@@ -1,5 +1,6 @@
 import os
 import logging
+import random
 from health_check import HealthCheck
 from datetime import datetime, timedelta
 from typing import Optional, Set
@@ -69,7 +70,8 @@ class PredecessorBot(commands.Bot):
         super().__init__(
             command_prefix='!', 
             intents=intents,
-            activity=discord.Game(name="/game help")
+            activity=discord.Game(name="/pred help"),
+            description="Predecessor Game Timer Bot"
         )
         
         # Initialize core components
@@ -84,18 +86,31 @@ class PredecessorBot(commands.Bot):
         """Set up the bot's initial state and start background tasks."""
         try:
             # Add game commands
-            self.tree.add_command(GameCommands(self))
+            logger.info("Adding game commands group...")
+            game_commands = GameCommands(self)
+            self.tree.add_command(game_commands)
             
             # Start health check server
-            self.health_check = HealthCheck(self, port=8080)
+            logger.info("Starting health check server...")
+            self.health_check = HealthCheck(self, port=8081)
             await self.health_check.start()
     
-            # Sync command tree
-            await self.tree.sync()
-            logger.info("Command tree synced successfully")
+            # Sync command tree with verbose logging
+            logger.info("Starting command sync...")
+            try:
+                synced = await self.tree.sync()
+                logger.info(f"Synced {len(synced)} commands")
+                for command in synced:
+                    logger.info(f"Synced command: {command.name}")
+            except Exception as e:
+                logger.error(f"Error syncing commands: {e}")
+                raise
             
             # Start background tasks
+            logger.info("Starting background tasks...")
             self.check_timers.start()
+            
+            logger.info("Setup complete!")
             
         except Exception as e:
             logger.error(f"Error in setup_hook: {e}", exc_info=True)
@@ -104,8 +119,15 @@ class PredecessorBot(commands.Bot):
     async def on_ready(self):
         """Called when the bot is ready and connected to Discord."""
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
+        # Add an additional sync attempt here for redundancy
+        try:
+            await self.tree.sync()
+            logger.info("Commands synced in on_ready")
+        except Exception as e:
+            logger.error(f"Error syncing commands in on_ready: {e}")
         logger.info('------')
 
+    # In main.py, update the check_timers method
     @tasks.loop(seconds=1.0)
     async def check_timers(self):
         """Check and announce timer events."""
@@ -132,9 +154,16 @@ class PredecessorBot(commands.Bot):
                     
                     # Check if it's time to announce
                     if current_time >= timer_config['time'] - warning_time:
+                        # Get messages list and select one randomly
+                        messages = timer_config.get('messages', [])
+                        if not messages:  # If messages list is empty, try legacy 'message' field
+                            messages = [timer_config.get('message', 'Timer event')]
+                        
+                        message = random.choice(messages)
+                        
                         await self.voice_service.play_announcement(
                             voice_client,
-                            timer_config['message'],
+                            message,
                             settings
                         )
                         self.timer.announced_events.add(event_id)
@@ -148,7 +177,7 @@ def run_bot():
     load_dotenv()
     
     # Get Discord token
-    token = os.getenv('DISCORD_TOKEN')
+    token = ('DISCORD_TOKEN')
     if not token:
         logger.error("No Discord token found in environment variables!")
         return
