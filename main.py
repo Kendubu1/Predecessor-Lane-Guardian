@@ -177,7 +177,7 @@ def run_bot():
     load_dotenv()
     
     # Get Discord token
-    token = ('DISCORD_TOKEN')
+    token = os.getenv('DISCORD_TOKEN')
     if not token:
         logger.error("No Discord token found in environment variables!")
         return
