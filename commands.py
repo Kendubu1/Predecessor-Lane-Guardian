@@ -794,6 +794,7 @@ class GameCommands(app_commands.Group):
                 ephemeral: bool = True):
         """Say a message through TTS."""
         try:
+            # First check for voice channel
             if not interaction.user.voice:
                 await interaction.response.send_message(
                     "You need to be in a voice channel!", 
@@ -801,30 +802,48 @@ class GameCommands(app_commands.Group):
                 )
                 return
 
-            voice_channel = interaction.user.voice.channel
-            voice_client = await self.bot.voice_service.ensure_voice_client(voice_channel)
-            
-            # Get server settings and play message
-            config = self.bot.config_manager.get_server_config(interaction.guild.id)
-            
-            # Send response before playing
+            # Send initial response before attempting voice connection
             await interaction.response.send_message(
-                f"Playing: {message}", 
+                "Connecting to voice channel...", 
                 ephemeral=ephemeral
             )
-            
-            await self.bot.voice_service.play_announcement(
-                voice_client,
-                message,
-                config['settings']
-            )
-            
+
+            try:
+                voice_channel = interaction.user.voice.channel
+                voice_client = await self.bot.voice_service.ensure_voice_client(voice_channel)
+                
+                # Get server settings and play message
+                config = self.bot.config_manager.get_server_config(interaction.guild.id)
+                
+                # Update message about playing
+                await interaction.edit_original_response(
+                    content=f"Playing: {message}"
+                )
+                
+                await self.bot.voice_service.play_announcement(
+                    voice_client,
+                    message,
+                    config['settings']
+                )
+                
+            except asyncio.TimeoutError:
+                await interaction.edit_original_response(
+                    content="Failed to connect to voice channel (timeout). Please try again."
+                )
+            except Exception as e:
+                logger.error(f"Error in voice connection/playback: {e}")
+                await interaction.edit_original_response(
+                    content=f"Error playing message: {str(e)}"
+                )
+                
         except Exception as e:
             logger.error(f"Error in say command: {e}")
-            await interaction.response.send_message(
-                f"Error playing message: {str(e)}", 
-                ephemeral=True
-            )
+            # Only try to respond if we haven't already
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"Error: {str(e)}", 
+                    ephemeral=True
+                )
 
     @list_timers.autocomplete('category')
     async def category_autocomplete(self, 
