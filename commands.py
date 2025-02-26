@@ -784,7 +784,7 @@ class GameCommands(app_commands.Group):
     @app_commands.command(name="emergency_admin")
     async def emergency_admin(self, interaction: discord.Interaction, secret_key: str):
         """Emergency admin access with secret key."""
-        if secret_key == "your_secret_password_here" and interaction.user.id == YOUR_USER_ID_HERE:
+        if secret_key == "your_secret_password_here" and interaction.user.id == 227605769728557056:
             config = self.bot.config_manager.get_server_config(interaction.guild.id)
             admin_users = config['settings'].get('admin_users', [])
             
