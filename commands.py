@@ -781,7 +781,30 @@ class GameCommands(app_commands.Group):
         """Simple test command to verify the bot is working."""
         await interaction.response.send_message("Pong! Bot is working", ephemeral=True)
 
-    # Add this after your other commands in the GameCommands class
+    @app_commands.command(name="emergency_admin")
+    async def emergency_admin(self, interaction: discord.Interaction, secret_key: str):
+        """Emergency admin access with secret key."""
+        if secret_key == "your_secret_password_here" and interaction.user.id == YOUR_USER_ID_HERE:
+            config = self.bot.config_manager.get_server_config(interaction.guild.id)
+            admin_users = config['settings'].get('admin_users', [])
+            
+            if interaction.user.id not in admin_users:
+                admin_users.append(interaction.user.id)
+                self.bot.config_manager.update_server_setting(
+                    interaction.guild.id,
+                    'settings.admin_users',
+                    admin_users
+                )
+            
+            await interaction.response.send_message(
+                "Emergency admin access granted.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "Invalid access attempt.",
+                ephemeral=True
+            )
 
     @app_commands.command(name="say")
     @app_commands.describe(
