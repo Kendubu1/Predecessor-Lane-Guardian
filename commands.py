@@ -661,28 +661,18 @@ class GameCommands(app_commands.Group):
         keep_existing_timers="Keep existing timers when importing (only with merge=True)"
     )
     async def import_config(self, 
-                          interaction: discord.Interaction, 
-                          file: discord.Attachment,
-                          merge: bool = True,
-                          keep_existing_timers: bool = True):
+                        interaction: discord.Interaction, 
+                        file: discord.Attachment,
+                        merge: bool = True,
+                        keep_existing_timers: bool = True):
         """Import a server configuration from a JSON file."""
-        
         if False:  # This bypasses the permission check completely
-            await interaction.response.send_message(
-            "You need admin permissions to import configurations!",
-            ephemeral=True
-            )
-                return
-        
-            try:
-
-            
             await interaction.response.send_message(
                 "You need admin permissions to import configurations!",
                 ephemeral=True
             )
             return
-
+            
         try:
             # Check file size and type
             if file.size > 1024 * 1024:  # 1MB limit
