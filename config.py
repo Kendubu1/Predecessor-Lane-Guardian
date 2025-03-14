@@ -129,6 +129,15 @@ DEFAULT_CONFIG = {
             ],
             'category': TimerCategory.EARLY_GAME.value
         },
+        'jungle_spawn': {
+            'time': 60,  # 1:00 - Updated for v1.4
+            'messages': [
+                'Jungle camps are spawning now',
+                'Red and blue buffs now available',
+                'Jungle is live, secure your buffs'
+            ],
+            'category': TimerCategory.BUFF.value
+        },
         'early_ward_reminder': {
             'time': 120,  # 2:00
             'messages': [
@@ -157,7 +166,7 @@ DEFAULT_CONFIG = {
             'category': TimerCategory.OBJECTIVE.value
         },
         'fangtooth_spawn': {
-            'time': 300,  # 5:00
+            'time': 240,  # 4:00 - Updated for v1.4 (was 5:00)
             'messages': [
                 'Fangtooth is now online',
                 'Fangtooth has entered the arena',
@@ -194,6 +203,15 @@ DEFAULT_CONFIG = {
             ],
             'category': TimerCategory.OBJECTIVE.value
         },
+        'gateway_spawn': {
+            'time': 480,  # 8:00 - Added for v1.4 (was 10:00)
+            'messages': [
+                'Gateways are now active, unlock map mobility',
+                'Gateways online, use them for map control',
+                'Gateways available, rotate faster'
+            ],
+            'category': TimerCategory.OBJECTIVE.value
+        },
         'jungle_level_check': {
             'time': 480,  # 8:00
             'messages': [
@@ -202,6 +220,15 @@ DEFAULT_CONFIG = {
                 'Time for jungle ultimates, prepare for ganks'
             ],
             'category': TimerCategory.FARM.value
+        },
+        'second_fang': {
+            'time': 570,  # 9:30 - Updated for v1.4 (was 10:30)
+            'messages': [
+                'Time to stack Fangtooth buffs',
+                'Consider securing another Fangtooth',
+                'Fangtooth stack opportunity'
+            ],
+            'category': TimerCategory.OBJECTIVE.value
         },
         'lane_pressure': {
             'time': 600,  # 10:00
@@ -221,12 +248,21 @@ DEFAULT_CONFIG = {
             ],
             'category': TimerCategory.FARM.value
         },
-        'second_fang': {
-            'time': 630,  # 10:30
+        'tower_plating_warning': {
+            'time': 690,  # 11:30 - New for v1.4
             'messages': [
-                'Time to stack Fangtooth buffs',
-                'Consider securing another Fangtooth',
-                'Fangtooth stack opportunity'
+                'Tower plating will fall in 30 seconds',
+                '30 seconds until tower platings are removed',
+                'Get last tower plating gold in 30 seconds'
+            ],
+            'category': TimerCategory.OBJECTIVE.value
+        },
+        'tower_plating': {
+            'time': 720,  # 12:00 - New for v1.4
+            'messages': [
+                'Tower platings are falling, get last tower gold now',
+                'Tower plating fortification ending soon',
+                'Last chance for tower plating gold, push now'
             ],
             'category': TimerCategory.OBJECTIVE.value
         },
@@ -266,6 +302,15 @@ DEFAULT_CONFIG = {
             ],
             'category': TimerCategory.REMINDER.value
         },
+        'empowered_river': {
+            'time': 960,  # 16:00 - Updated for v1.4 (was 21:00)
+            'messages': [
+                'River buffs now provide empowered effects',
+                'River buffs are now enhanced',
+                'Empowered river buffs active'
+            ],
+            'category': TimerCategory.LATE_GAME.value
+        },
         'wave_management': {
             'time': 1020,  # 17:00
             'messages': [
@@ -278,22 +323,13 @@ DEFAULT_CONFIG = {
         
         # Late Game Phase (20:00+)
         'orb_prime_spawn': {
-            'time': 1140,  # 20:00
+            'time': 1140,  # 19:00
             'messages': [
                 'Prepare for Orb Prime soon, win vision',
                 'Orb Prime approaching, secure vision control',
                 'Get ready for Orb Prime, vision is crucial'
             ],
             'category': TimerCategory.OBJECTIVE.value
-        },
-        'empowered_river': {
-            'time': 1260,  # 21:00
-            'messages': [
-                'River buffs now provide empowered effects',
-                'River buffs are now enhanced',
-                'Empowered river buffs active'
-            ],
-            'category': TimerCategory.LATE_GAME.value
         },
         'late_game_start': {
             'time': 1500,  # 25:00
