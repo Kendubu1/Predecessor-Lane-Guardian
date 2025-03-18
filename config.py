@@ -149,11 +149,11 @@ DEFAULT_CONFIG = {
             'category': TimerCategory.REMINDER.value
         },
         'first_gold_warning': {
-            'time': 150,  # 2:30
+            'time': 110,  # 2:30
             'messages': [
-                '30 seconds until first gold and cyan buffs spawn',
-                'Gold and cyan buffs spawning in 30 seconds, prepare',
-                'First buffs coming online in 30, get ready'
+                '10 seconds until first gold and cyan buffs spawn',
+                'Gold and cyan buffs spawning in 10 seconds, prepare',
+                'First buffs coming online in 10, get ready'
             ],
             'category': TimerCategory.BUFF.value
         },
