@@ -47,9 +47,14 @@ class GameCommands(app_commands.Group):
         """Check if user has permission to use admin commands."""
         if interaction.user.id == interaction.guild.owner_id:
             return True
-            
+
         config = self.bot.config_manager.get_server_config(interaction.guild.id)
         admin_roles = config.get('settings', {}).get('admin_roles', [])
+        admin_users = config.get('settings', {}).get('admin_users', [])
+
+        if interaction.user.id in admin_users:
+            return True
+
         return any(role.id in admin_roles for role in interaction.user.roles)
 
     def validate_config(self, config_data: dict) -> tuple[bool, str, dict]:
