@@ -416,8 +416,11 @@ class GameCommands(app_commands.Group):
         ]
 
     @app_commands.command(name="start")
-    @app_commands.describe(time="Game time in M:SS format (defaults to 0:00)")
-    async def start(self, interaction: discord.Interaction, time: str = "00:00"):
+    @app_commands.describe(
+        time="Game time in M:SS format (defaults to 0:00)",
+        mode="Game mode (standard or nitro)"
+    )
+    async def start(self, interaction: discord.Interaction, time: str = "00:00", mode: str = "standard"):
         """Start the game timer."""
         try:
             if not interaction.user.voice:
@@ -427,8 +430,8 @@ class GameCommands(app_commands.Group):
             voice_channel = interaction.user.voice.channel
             await self.bot.voice_service.ensure_voice_client(voice_channel, force_new=True)
             
-            self.bot.timer.start(time)
-            await interaction.response.send_message(f"Game timer started at {time}")
+            self.bot.timer.start(time, mode)
+            await interaction.response.send_message(f"Game timer started at {time} in {mode} mode")
             
         except ValueError:
             await interaction.response.send_message("Invalid time format. Use M:SS (e.g., 0:05)")
