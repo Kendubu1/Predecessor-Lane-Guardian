@@ -385,7 +385,8 @@ DEFAULT_CONFIG = {
             ],
             'category': TimerCategory.LATE_GAME.value
         }
-    }
+    },
+    'nitro_timers': {}
 }
 
 class ConfigManager:
@@ -558,10 +559,14 @@ class ConfigManager:
             return True
         return False
     
-    def get_server_timers(self, server_id: int, category: Optional[str] = None) -> Dict[str, Any]:
-        """Get all timers for a server, optionally filtered by category."""
+    def get_server_timers(self, server_id: int, category: Optional[str] = None,
+                          mode: str = 'standard') -> Dict[str, Any]:
+        """Get timers for a server and mode, optionally filtered by category."""
         config = self.get_server_config(server_id)
-        timers = config.get('timers', {})
+        if mode == 'nitro':
+            timers = config.get('nitro_timers', {})
+        else:
+            timers = config.get('timers', {})
         
         if category:
             return {

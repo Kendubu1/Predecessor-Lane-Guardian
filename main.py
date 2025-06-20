@@ -35,18 +35,20 @@ class GameTimer:
     def __init__(self):
         self.start_time: Optional[datetime] = None
         self.is_active: bool = False
+        self.mode: str = 'standard'
         self.announced_events: Set[str] = set()
         logger.info("GameTimer initialized")
 
-    def start(self, time_str: str) -> None:
+    def start(self, time_str: str, mode: str = 'standard') -> None:
         """Start the timer from a specific time point."""
         try:
             minutes, seconds = map(int, time_str.split(':'))
             current_time = datetime.now()
             self.start_time = current_time - timedelta(minutes=minutes, seconds=seconds)
             self.is_active = True
+            self.mode = mode
             self.announced_events.clear()
-            logger.info(f"Timer started at {time_str}")
+            logger.info(f"Timer started at {time_str} in {mode} mode")
         except ValueError as e:
             logger.error(f"Error parsing time string: {e}")
             raise
@@ -117,7 +119,7 @@ class PredecessorBot(commands.Bot):
                 
                 # Start background tasks
                 logger.info("Starting background tasks...")
-                self.check_timers.start()
+                self.check_timers.start('standard')
                 
                 logger.info("Setup complete!")
                 
@@ -138,8 +140,8 @@ class PredecessorBot(commands.Bot):
 
     # In main.py, update the check_timers method
     @tasks.loop(seconds=1.0)
-    async def check_timers(self):
-        """Check and announce timer events."""
+    async def check_timers(self, mode: str = 'standard'):
+        """Check and announce timer events for the given mode."""
         if not self.timer.is_active:
             return
 
@@ -148,7 +150,8 @@ class PredecessorBot(commands.Bot):
             
             for voice_client in self.voice_clients:
                 server_config = self.config_manager.get_server_config(voice_client.guild.id)
-                timers = server_config.get('timers', {})
+                active_mode = self.timer.mode if hasattr(self.timer, 'mode') else mode
+                timers = self.config_manager.get_server_timers(voice_client.guild.id, mode=active_mode)
                 settings = server_config.get('settings', {})
                 
                 warning_time = settings.get('tts_settings', {}).get('warning_time', 30)
