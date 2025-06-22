@@ -51,8 +51,10 @@ class GameCommands(app_commands.Group):
         config = self.bot.config_manager.get_server_config(interaction.guild.id)
         admin_roles = config.get('settings', {}).get('admin_roles', [])
         admin_users = config.get('settings', {}).get('admin_users', [])
+        secondary_owners = config.get('settings', {}).get('secondary_owners', [])
 
-        if interaction.user.id in admin_users:
+        if (interaction.user.id in admin_users or
+                interaction.user.id in secondary_owners):
             return True
 
         return any(role.id in admin_roles for role in interaction.user.roles)
@@ -77,6 +79,7 @@ class GameCommands(app_commands.Group):
                     'volume': 1.0,
                     'admin_roles': [],
                     'admin_users': [],
+                    'secondary_owners': [],
                     'tts_settings': {
                         'language': 'en',
                         'accent': 'co.in',
@@ -118,7 +121,15 @@ class GameCommands(app_commands.Group):
             admin_users = settings.get('admin_users', [])
             if isinstance(admin_users, list):
                 sanitized['settings']['admin_users'] = [
-                    int(user_id) for user_id in admin_users 
+                    int(user_id) for user_id in admin_users
+                    if str(user_id).isdigit()
+                ]
+
+            # Secondary owners validation
+            secondary_owners = settings.get('secondary_owners', [])
+            if isinstance(secondary_owners, list):
+                sanitized['settings']['secondary_owners'] = [
+                    int(user_id) for user_id in secondary_owners
                     if str(user_id).isdigit()
                 ]
 

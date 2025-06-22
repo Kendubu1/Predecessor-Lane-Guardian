@@ -172,34 +172,49 @@ class PredecessorBot(commands.Bot):
             logger.error(f"Error syncing commands in on_ready: {e}")
         logger.info('------')
 
-        # Ensure each guild owner is recorded as an admin user
+        # Ensure each guild owner and configured secondary owners
+        # are recorded as admin users
         for guild in self.guilds:
             config = self.config_manager.get_server_config(guild.id)
             admin_users = config.get('settings', {}).get('admin_users', [])
-            if guild.owner_id not in admin_users:
-                admin_users.append(guild.owner_id)
+            secondary = config.get('settings', {}).get('secondary_owners', [])
+            updated = False
+
+            for owner_id in [guild.owner_id, *secondary]:
+                if owner_id not in admin_users:
+                    admin_users.append(owner_id)
+                    updated = True
+
+            if updated:
                 self.config_manager.update_server_setting(
                     guild.id,
                     'settings.admin_users',
                     admin_users,
                 )
                 logger.info(
-                    f"Added guild owner {guild.owner_id} as admin for {guild.id}"
+                    f"Added owner IDs {secondary + [guild.owner_id]} as admins for {guild.id}"
                 )
 
     async def on_guild_join(self, guild: discord.Guild):
         """Automatically add the guild owner to admin list when joining."""
         config = self.config_manager.get_server_config(guild.id)
         admin_users = config.get('settings', {}).get('admin_users', [])
-        if guild.owner_id not in admin_users:
-            admin_users.append(guild.owner_id)
+        secondary = config.get('settings', {}).get('secondary_owners', [])
+        updated = False
+
+        for owner_id in [guild.owner_id, *secondary]:
+            if owner_id not in admin_users:
+                admin_users.append(owner_id)
+                updated = True
+
+        if updated:
             self.config_manager.update_server_setting(
                 guild.id,
                 'settings.admin_users',
                 admin_users,
             )
             logger.info(
-                f"Guild join: added owner {guild.owner_id} as admin for {guild.id}"
+                f"Guild join: added owners {secondary + [guild.owner_id]} as admins for {guild.id}"
             )
         
     # In main.py, update the check_timers method

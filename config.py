@@ -100,6 +100,7 @@ DEFAULT_CONFIG = {
     'settings': {
         'volume': 1.0,
         'admin_roles': [],
+        'secondary_owners': [],
         'tts_settings': {
             'language': TTSLanguage.ENGLISH.value,
             'accent': TTSAccent.AMERICAN.value,
@@ -474,9 +475,13 @@ class ConfigManager:
             if 'admin_roles' not in migrated['settings']:
                 migrated['settings']['admin_roles'] = []
                 was_migrated = True
-                
+
             if 'admin_users' not in migrated['settings']:
                 migrated['settings']['admin_users'] = []
+                was_migrated = True
+
+            if 'secondary_owners' not in migrated['settings']:
+                migrated['settings']['secondary_owners'] = []
                 was_migrated = True
                 
             if was_migrated:
