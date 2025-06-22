@@ -25,9 +25,22 @@ def check_voice_dependencies() -> bool:
         missing = True
 
     if not discord.opus.is_loaded():
-        try:
-            discord.opus.load_opus('libopus')
-        except Exception:
+        # Try a few common library names to support different platforms
+        opus_libs = [
+            os.getenv("OPUS_LIB"),  # allow override via environment variable
+            "libopus.so.0",
+            "libopus",
+            "opus",
+        ]
+        for lib in filter(None, opus_libs):
+            try:
+                discord.opus.load_opus(lib)
+                if discord.opus.is_loaded():
+                    break
+            except Exception:
+                continue
+
+        if not discord.opus.is_loaded():
             logger.error(
                 "Opus library could not be loaded. Voice playback may fail."
             )
