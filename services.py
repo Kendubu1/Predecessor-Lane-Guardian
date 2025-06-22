@@ -112,8 +112,10 @@ class TTSService:
 
 class VoiceService:
     """Handles voice channel interactions and audio playback."""
-    
-    def __init__(self):
+
+    def __init__(self, bot: discord.Client):
+        """Initialize the service with a reference to the bot."""
+        self.bot = bot
         self.tts_service = TTSService()
         self.voice_timeouts = {}  # Store timeout tasks per guild
         self.MAX_CONNECTION_TIME = 7200  # 2 hours in seconds
@@ -136,7 +138,7 @@ class VoiceService:
         """Disconnect after INACTIVITY_TIMEOUT seconds of no activity."""
         try:
             await asyncio.sleep(self.INACTIVITY_TIMEOUT)
-            if voice_client.is_connected() and not voice_client.guild.bot.timer.is_active:
+            if voice_client.is_connected() and not self.bot.timer.is_active:
                 await self.cleanup_voice_clients(voice_client.guild)
                 logger.info(f"Voice client disconnected after {self.INACTIVITY_TIMEOUT} seconds of inactivity")
         except asyncio.CancelledError:

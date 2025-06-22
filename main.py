@@ -86,7 +86,7 @@ class PredecessorBot(commands.Bot):
         self.timer = GameTimer()
         self.config_manager = ConfigManager()
         self.tts_service = TTSService()
-        self.voice_service = VoiceService()
+        self.voice_service = VoiceService(self)
         
         logger.info("PredecessorBot initialized")
 
