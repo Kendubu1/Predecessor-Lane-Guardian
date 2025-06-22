@@ -103,7 +103,9 @@ DISCORD_TOKEN=your_discord_bot_token_here
 - `/pred add_admin_role <role>` - Add an admin role
 
 When the bot joins a server or restarts, the guild owner is automatically added
-to the `admin_users` list so they can manage the bot immediately.
+to the `admin_users` list so they can manage the bot immediately. Any users
+listed under `secondary_owners` in the server configuration are also added
+automatically.
 
 Admins are recognized either by one of the configured roles or by being
 explicitly listed in the server settings as `admin_users`.
@@ -125,6 +127,7 @@ The bot stores configurations in `server_configs.json`. Each server can have its
 - TTS settings
 - Volume settings
 - Admin roles
+- Secondary owners
 - Custom pronunciations
 
 ## Contributing
