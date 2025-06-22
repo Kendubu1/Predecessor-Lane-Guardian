@@ -165,9 +165,11 @@ class VoiceService:
             
             # Connect to the new channel with timeout
             try:
-                voice_client = await asyncio.wait_for(
-                    channel.connect(),
-                    timeout=timeout
+                # Use discord.py's built-in timeout handling when connecting
+                # to allow the library to manage retries more gracefully.
+                voice_client = await channel.connect(
+                    timeout=timeout,
+                    reconnect=True
                 )
                 
                 # Set up timeouts
