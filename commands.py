@@ -415,6 +415,146 @@ class GameCommands(app_commands.Group):
             for accent, name in filtered[:25]
         ]
 
+    @app_commands.command(name="settings")
+    async def settings(self, interaction: discord.Interaction):
+        """Show the current server settings."""
+        config = self.bot.config_manager.get_server_config(interaction.guild.id)
+        settings = config.get('settings', {})
+        embed = discord.Embed(title="Server Settings", color=discord.Color.blue())
+
+        embed.add_field(name="Volume", value=f"{settings.get('volume', 1.0):.1f}", inline=True)
+
+        admin_roles = [f"<@&{rid}>" for rid in settings.get('admin_roles', [])]
+        admin_users = [f"<@{uid}>" for uid in settings.get('admin_users', [])]
+
+        embed.add_field(name="Admin Roles", value=', '.join(admin_roles) if admin_roles else "None", inline=False)
+        embed.add_field(name="Admin Users", value=', '.join(admin_users) if admin_users else "None", inline=False)
+
+        tts = settings.get('tts_settings', {})
+        lang_acc_name = VALID_LANG_ACCENT_PAIRS.get(
+            (tts.get('language'), tts.get('accent')),
+            f"{tts.get('language', 'en')} ({tts.get('accent', 'co.in')})"
+        )
+        embed.add_field(name="TTS", value=f"{lang_acc_name} - {tts.get('speed',1.0)}x", inline=False)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="set_volume")
+    async def set_volume(self, interaction: discord.Interaction, volume: float):
+        """Set the announcement volume (0.0 - 1.0)."""
+        if not await self.check_permissions(interaction):
+            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
+            return
+
+        volume = max(0.0, min(1.0, volume))
+        self.bot.config_manager.update_server_setting(
+            interaction.guild.id,
+            'settings.volume',
+            volume
+        )
+
+        await interaction.response.send_message(f"Volume set to {volume:.1f}", ephemeral=True)
+
+    @app_commands.command(name="test_voice")
+    async def test_voice(self, interaction: discord.Interaction, message: Optional[str] = "This is a test"):
+        """Play a test voice line using current settings."""
+        if not interaction.user.voice:
+            await interaction.response.send_message("You need to be in a voice channel!", ephemeral=True)
+            return
+
+        voice_channel = interaction.user.voice.channel
+        voice_client = await self.bot.voice_service.ensure_voice_client(voice_channel)
+        config = self.bot.config_manager.get_server_config(interaction.guild.id)
+
+        await interaction.response.send_message("Playing test message...", ephemeral=True)
+        await self.bot.voice_service.play_announcement(voice_client, message, config['settings'])
+
+    @app_commands.command(name="remove_admin")
+    async def remove_admin(self, interaction: discord.Interaction, user: discord.User):
+        """Remove a user from bot admins."""
+        if not await self.check_permissions(interaction):
+            await interaction.response.send_message("You don't have permission to modify admin users!", ephemeral=True)
+            return
+
+        config = self.bot.config_manager.get_server_config(interaction.guild.id)
+        admin_users = config['settings'].get('admin_users', [])
+
+        if user.id not in admin_users:
+            await interaction.response.send_message(f"{user.name} is not an admin!", ephemeral=True)
+            return
+
+        admin_users.remove(user.id)
+        self.bot.config_manager.update_server_setting(
+            interaction.guild.id,
+            'settings.admin_users',
+            admin_users
+        )
+
+        await interaction.response.send_message(f"Removed {user.name} from bot admins.", ephemeral=True)
+
+    @app_commands.command(name="add_admin_role")
+    async def add_admin_role(self, interaction: discord.Interaction, role: discord.Role):
+        """Add a role as bot admin."""
+        if not await self.check_permissions(interaction):
+            await interaction.response.send_message("You don't have permission to modify admin roles!", ephemeral=True)
+            return
+
+        config = self.bot.config_manager.get_server_config(interaction.guild.id)
+        admin_roles = config['settings'].get('admin_roles', [])
+
+        if role.id in admin_roles:
+            await interaction.response.send_message(f"{role.name} is already an admin role!", ephemeral=True)
+            return
+
+        admin_roles.append(role.id)
+        self.bot.config_manager.update_server_setting(
+            interaction.guild.id,
+            'settings.admin_roles',
+            admin_roles
+        )
+
+        await interaction.response.send_message(f"Added {role.name} as an admin role.", ephemeral=True)
+
+    @app_commands.command(name="edit_timer")
+    @app_commands.choices(category=[
+        app_commands.Choice(name=cat.name.title(), value=cat.value)
+        for cat in TimerCategory
+    ])
+    async def edit_timer(self, interaction: discord.Interaction,
+                         name: str, time: str, message: Optional[str] = None,
+                         category: str = TimerCategory.REMINDER.value):
+        """Edit an existing timer."""
+        if not await self.check_permissions(interaction):
+            await interaction.response.send_message("You don't have permission to modify timers!", ephemeral=True)
+            return
+
+        config = self.bot.config_manager.get_server_config(interaction.guild.id)
+        timer = config.get('timers', {}).get(name)
+        if not timer:
+            await interaction.response.send_message(f"Timer '{name}' not found", ephemeral=True)
+            return
+
+        try:
+            minutes, seconds = map(int, time.split(':'))
+            total_seconds = minutes * 60 + seconds
+        except ValueError:
+            await interaction.response.send_message("Invalid time format. Use M:SS (e.g., 5:30)", ephemeral=True)
+            return
+
+        messages = timer.get('messages', [])
+        if message:
+            messages = [message]
+
+        self.bot.config_manager.update_timer(
+            interaction.guild.id,
+            name,
+            total_seconds,
+            messages,
+            category
+        )
+
+        await interaction.response.send_message(f"Timer '{name}' updated", ephemeral=True)
+
     @app_commands.command(name="start")
     @app_commands.describe(
         time="Game time in M:SS format (defaults to 0:00)",
@@ -674,7 +814,7 @@ class GameCommands(app_commands.Group):
                         merge: bool = True,
                         keep_existing_timers: bool = True):
         """Import a server configuration from a JSON file."""
-        if False:  # This bypasses the permission check completely
+        if not await self.check_permissions(interaction):
             await interaction.response.send_message(
                 "You need admin permissions to import configurations!",
                 ephemeral=True
@@ -784,35 +924,6 @@ class GameCommands(app_commands.Group):
                 ephemeral=True
             )
 
-    @app_commands.command(name="ping")
-    async def ping(self, interaction: discord.Interaction):
-        """Simple test command to verify the bot is working."""
-        await interaction.response.send_message("Pong! Bot is working", ephemeral=True)
-
-    @app_commands.command(name="emergency_admin")
-    async def emergency_admin(self, interaction: discord.Interaction, secret_key: str):
-        """Emergency admin access with secret key."""
-        if secret_key == "your_secret_password_here" and interaction.user.id == 227605769728557056:
-            config = self.bot.config_manager.get_server_config(interaction.guild.id)
-            admin_users = config['settings'].get('admin_users', [])
-            
-            if interaction.user.id not in admin_users:
-                admin_users.append(interaction.user.id)
-                self.bot.config_manager.update_server_setting(
-                    interaction.guild.id,
-                    'settings.admin_users',
-                    admin_users
-                )
-            
-            await interaction.response.send_message(
-                "Emergency admin access granted.",
-                ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                "Invalid access attempt.",
-                ephemeral=True
-            )
 
     @app_commands.command(name="say")
     @app_commands.describe(

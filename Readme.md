@@ -21,7 +21,8 @@ To make the most of your Lane Guardian do the following...
    - Jump into a voice channel
    - `/pred settings` - Make sure your bot isn't speaking in cursed tongues
    - `/pred say` - Check if the volume is perfect for your precious ears or just mess with your friends
-   - `/pred tts_set` - Mess with the tts voice language & accent.
+   - `/pred set_tts` - Configure the TTS voice language & accent.
+   - `/pred test_voice` - Play a quick voice line to verify volume
    - `/pred list_timers ` - Review all the existing timers in place by default
    - `/pred export_config` & `/pred import_config` - Make any edits of the TTS voice lines in place!
 
@@ -84,6 +85,7 @@ DISCORD_TOKEN=your_discord_bot_token_here
 ### Timer Management
 - `/pred add_timer <name> <time> <message> [category]` - Add a new timer
 - `/pred remove_timer <name>` - Remove an existing timer
+- `/pred edit_timer <name> <time> [message] [category]` - Edit a timer
 - `/pred import_config <config_code>` - Import a timer configuration
 - `/pred export_config` - Export current configuration
 
@@ -96,7 +98,6 @@ DISCORD_TOKEN=your_discord_bot_token_here
 - `/pred add_admin <user>` - Add a bot admin
 - `/pred remove_admin <user>` - Remove a bot admin
 - `/pred add_admin_role <role>` - Add an admin role
-- `/pred emergency_admin <secret>` - Grant temporary admin via secret key
 
 When the bot joins a server or restarts, the guild owner is automatically added
 to the `admin_users` list so they can manage the bot immediately.
