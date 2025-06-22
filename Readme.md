@@ -66,6 +66,7 @@ source venv/bin/activate  # On Windows, use: venv\Scripts\activate
 ```bash
 pip install -r requirements.txt
 ```
+This will install `discord.py` with voice support. Ensure `PyNaCl` is present or voice connections will fail.
 
 4. Create a `.env` file in the project root and add your Discord bot token:
 ```

@@ -13,6 +13,27 @@ from dotenv import load_dotenv
 
 # Local imports
 from health_check import HealthCheck
+
+def check_voice_dependencies() -> bool:
+    """Ensure required voice dependencies are available."""
+    missing = False
+    if not discord.voice_client.has_nacl:
+        logger.error(
+            "PyNaCl library is not installed. Voice features will not work. "
+            "Install with 'pip install -r requirements.txt' or 'pip install discord.py[voice]'."
+        )
+        missing = True
+
+    if not discord.opus.is_loaded():
+        try:
+            discord.opus.load_opus('libopus')
+        except Exception:
+            logger.error(
+                "Opus library could not be loaded. Voice playback may fail."
+            )
+            missing = True
+
+    return not missing
 from config import ConfigManager
 from services import TTSService, VoiceService
 from commands import GameCommands
@@ -217,6 +238,10 @@ def run_bot():
     """Start the bot."""
     # Load environment variables
     load_dotenv()
+
+    if not check_voice_dependencies():
+        logger.critical("Missing required voice dependencies. Exiting.")
+        return
     
     # Get Discord token
     token = os.getenv('DISCORD_TOKEN')
