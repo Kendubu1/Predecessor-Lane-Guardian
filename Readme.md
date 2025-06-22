@@ -46,6 +46,7 @@ Remember: Lane Guardian is like your aggressive but loving coach to keep your 5 
 - Python 3.8 or higher
 - Discord Bot Token
 - FFmpeg (for voice functionality)
+- Opus system library (e.g., `libopus0` on Debian/Ubuntu)
 - Required Python packages (see requirements.txt)
 
 ## Installation 💻
@@ -74,6 +75,7 @@ DISCORD_TOKEN=your_discord_bot_token_here
 ```
 
 5. Ensure FFmpeg is installed on your system and accessible in the PATH
+6. Install the Opus library for voice playback (e.g., `sudo apt-get install libopus0` on Debian/Ubuntu)
 
 ## Commands 🎮
 
