@@ -138,6 +138,36 @@ class PredecessorBot(commands.Bot):
             logger.error(f"Error syncing commands in on_ready: {e}")
         logger.info('------')
 
+        # Ensure each guild owner is recorded as an admin user
+        for guild in self.guilds:
+            config = self.config_manager.get_server_config(guild.id)
+            admin_users = config.get('settings', {}).get('admin_users', [])
+            if guild.owner_id not in admin_users:
+                admin_users.append(guild.owner_id)
+                self.config_manager.update_server_setting(
+                    guild.id,
+                    'settings.admin_users',
+                    admin_users,
+                )
+                logger.info(
+                    f"Added guild owner {guild.owner_id} as admin for {guild.id}"
+                )
+
+    async def on_guild_join(self, guild: discord.Guild):
+        """Automatically add the guild owner to admin list when joining."""
+        config = self.config_manager.get_server_config(guild.id)
+        admin_users = config.get('settings', {}).get('admin_users', [])
+        if guild.owner_id not in admin_users:
+            admin_users.append(guild.owner_id)
+            self.config_manager.update_server_setting(
+                guild.id,
+                'settings.admin_users',
+                admin_users,
+            )
+            logger.info(
+                f"Guild join: added owner {guild.owner_id} as admin for {guild.id}"
+            )
+        
     # In main.py, update the check_timers method
     @tasks.loop(seconds=1.0)
     async def check_timers(self, mode: str = 'standard'):
