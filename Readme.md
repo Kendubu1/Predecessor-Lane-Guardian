@@ -98,6 +98,9 @@ DISCORD_TOKEN=your_discord_bot_token_here
 - `/pred add_admin_role <role>` - Add an admin role
 - `/pred emergency_admin <secret>` - Grant temporary admin via secret key
 
+When the bot joins a server or restarts, the guild owner is automatically added
+to the `admin_users` list so they can manage the bot immediately.
+
 Admins are recognized either by one of the configured roles or by being
 explicitly listed in the server settings as `admin_users`.
 
