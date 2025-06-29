@@ -1,5 +1,6 @@
 from enum import Enum
 import json
+import copy
 import logging
 from typing import Dict, Any, Optional
 
@@ -421,7 +422,7 @@ class ConfigManager:
         """Get configuration for a specific server."""
         server_id = str(server_id)
         if server_id not in self.configs:
-            self.configs[server_id] = DEFAULT_CONFIG.copy()
+            self.configs[server_id] = copy.deepcopy(DEFAULT_CONFIG)
             self.save_configs()
         return self.configs[server_id]
     
@@ -523,7 +524,7 @@ class ConfigManager:
         """Update a specific setting for a server using dot notation path."""
         server_id = str(server_id)
         if server_id not in self.configs:
-            self.configs[server_id] = DEFAULT_CONFIG.copy()
+            self.configs[server_id] = copy.deepcopy(DEFAULT_CONFIG)
 
         current = self.configs[server_id]
         *parts, last = path.split('.')
@@ -541,7 +542,7 @@ class ConfigManager:
         """Update or create a timer for a server."""
         server_id = str(server_id)
         if server_id not in self.configs:
-            self.configs[server_id] = DEFAULT_CONFIG.copy()
+            self.configs[server_id] = copy.deepcopy(DEFAULT_CONFIG)
         
         if 'timers' not in self.configs[server_id]:
             self.configs[server_id]['timers'] = {}
@@ -605,7 +606,7 @@ class ConfigManager:
         """Update or create a timer for a server."""
         server_id = str(server_id)
         if server_id not in self.configs:
-            self.configs[server_id] = DEFAULT_CONFIG.copy()
+            self.configs[server_id] = copy.deepcopy(DEFAULT_CONFIG)
         
         if 'timers' not in self.configs[server_id]:
             self.configs[server_id]['timers'] = {}
