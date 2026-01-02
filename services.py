@@ -1,6 +1,6 @@
 import os
 import logging
-import gtts
+import edge_tts
 import discord
 import asyncio
 from typing import Dict, Any
@@ -10,39 +10,57 @@ from pathlib import Path
 logger = logging.getLogger('PredTimer.Services')
 
 class TTSService:
-    """Handles Text-to-Speech generation and management."""
-    
+    """Handles Text-to-Speech generation and management using Edge-TTS."""
+
     def __init__(self):
         self.temp_dir = Path(tempfile.gettempdir()) / "predtimer_tts"
         self.temp_dir.mkdir(exist_ok=True)
-        logger.info("TTSService initialized")
+        logger.info("TTSService initialized with Edge-TTS")
 
-    def create_tts_message(self, message: str, settings: Dict[str, Any]) -> str:
-        """Create a TTS audio file from the given message."""
+    async def create_tts_message(self, message: str, settings: Dict[str, Any]) -> str:
+        """Create a TTS audio file from the given message using Edge-TTS."""
         try:
             tts_settings = settings.get('tts_settings', {})
-            
+
             # Pre-process message based on settings
             processed_message = self._process_message(message, tts_settings)
-            
-            # Create TTS without speed modification (we'll handle that in FFmpeg)
-            tts = gtts.gTTS(
-                text=processed_message,
-                lang=tts_settings.get('language', 'en'),
-                tld=tts_settings.get('accent', 'co.in'),
-                slow=False  # Always use normal speed, we'll adjust with FFmpeg
-            )
-            
+
+            # Get voice settings
+            voice_name = tts_settings.get('voice_name', 'en-IN-NeerjaNeural')
+            rate = self._get_rate_string(tts_settings.get('speed', 1.0))
+            pitch = self._get_pitch_string(tts_settings.get('pitch', 1.0))
+
             # Generate unique filename
-            filename = self.temp_dir / f"temp_{hash(processed_message)}_{tts_settings.get('accent', 'co.in')}.mp3"
-            tts.save(str(filename))
-            
-            logger.debug(f"Created TTS file: {filename}")
+            filename = self.temp_dir / f"temp_{hash(processed_message)}_{voice_name.replace('-', '_')}.mp3"
+
+            # Create TTS with Edge-TTS
+            communicate = edge_tts.Communicate(
+                text=processed_message,
+                voice=voice_name,
+                rate=rate,
+                pitch=pitch
+            )
+
+            await communicate.save(str(filename))
+
+            logger.debug(f"Created Edge-TTS file: {filename} with voice {voice_name}")
             return str(filename)
-            
+
         except Exception as e:
-            logger.error(f"Error creating TTS message: {e}")
+            logger.error(f"Error creating Edge-TTS message: {e}")
             raise
+
+    def _get_rate_string(self, speed: float) -> str:
+        """Convert speed multiplier to Edge-TTS rate string."""
+        # Edge-TTS uses percentage: +0% is normal, +50% is 1.5x, -50% is 0.5x
+        percentage = int((speed - 1.0) * 100)
+        return f"{percentage:+d}%"
+
+    def _get_pitch_string(self, pitch: float) -> str:
+        """Convert pitch multiplier to Edge-TTS pitch string."""
+        # Edge-TTS uses Hz offset, we'll use percentage for simplicity
+        percentage = int((pitch - 1.0) * 100)
+        return f"{percentage:+d}Hz"
 
     def _process_message(self, message: str, settings: Dict[str, Any]) -> str:
         """Process message according to TTS settings."""
@@ -185,7 +203,7 @@ class VoiceService:
             logger.error(f"Error ensuring voice client: {e}")
             raise
 
-    async def play_announcement(self, 
+    async def play_announcement(self,
                               voice_client: discord.VoiceClient,
                               message: str,
                               settings: Dict[str, Any]) -> None:
@@ -194,20 +212,18 @@ class VoiceService:
             if voice_client.is_playing():
                 voice_client.stop()
 
-            # Create TTS file
-            filename = self.tts_service.create_tts_message(message, settings)
-            
-            # Get volume and speed settings
+            # Create TTS file (Edge-TTS is async)
+            filename = await self.tts_service.create_tts_message(message, settings)
+
+            # Get volume setting (speed/pitch already handled by Edge-TTS)
             volume = settings.get('volume', 1.0)
-            speed = settings.get('tts_settings', {}).get('speed', 1.0)
-            
-            # Build FFmpeg options with speed adjustment
+
+            # Build FFmpeg options - Edge-TTS handles speed/pitch internally
             options = {
-                'options': f'-vn -af "atempo={speed},volume={volume}"'
+                'options': f'-vn -af "volume={volume}"'
             }
-            
+
             logger.info(f"Playing audio with options: {options}")
-            logger.info(f"Speed setting: {speed}")
             logger.info(f"Volume setting: {volume}")
             
             # Create the FFmpeg audio source with options
@@ -229,12 +245,11 @@ class VoiceService:
             
             # Reset inactivity timer after message
             await self.reset_inactivity_timer(voice_client)
-            
-            # Wait for audio to finish
-            base_wait_time = 5
-            adjusted_wait_time = base_wait_time / float(speed)
-            logger.info(f"Waiting for {adjusted_wait_time} seconds for audio to complete")
-            await asyncio.sleep(adjusted_wait_time)
+
+            # Wait for audio to finish (Edge-TTS handles speed internally)
+            wait_time = 5  # Base wait time
+            logger.info(f"Waiting for {wait_time} seconds for audio to complete")
+            await asyncio.sleep(wait_time)
             
             # Cleanup
             try:

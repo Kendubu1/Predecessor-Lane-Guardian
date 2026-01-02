@@ -20,7 +20,8 @@ from config import (
     TTSLanguage,
     TTSAccent,
     TTSSpeed,
-    VALID_LANG_ACCENT_PAIRS
+    VALID_LANG_ACCENT_PAIRS,
+    EDGE_TTS_VOICES
 )
 from services import TTSService, VoiceService
 
@@ -176,10 +177,17 @@ class GameCommands(app_commands.Group):
             if not isinstance(tts_settings, dict):
                 tts_settings = {}
 
-            # Language and accent validation
+            # Voice name validation (Edge-TTS)
+            voice_name = str(tts_settings.get('voice_name', 'en-IN-NeerjaNeural'))
+            if voice_name and isinstance(voice_name, str):
+                sanitized['settings']['tts_settings']['voice_name'] = voice_name
+            else:
+                sanitized['settings']['tts_settings']['voice_name'] = 'en-IN-NeerjaNeural'
+
+            # Language and accent validation (kept for backwards compatibility)
             language = str(tts_settings.get('language', 'en'))
             accent = str(tts_settings.get('accent', 'co.in'))
-            
+
             # Check if language-accent pair is valid
             if (language, accent) in VALID_LANG_ACCENT_PAIRS:
                 sanitized['settings']['tts_settings']['language'] = language
@@ -283,31 +291,91 @@ class GameCommands(app_commands.Group):
             ephemeral=True
         )
 
+    @app_commands.command(name="set_voice")
+    @app_commands.describe(
+        voice="Choose a voice for announcements"
+    )
+    async def set_voice(self, interaction: discord.Interaction, voice: str):
+        """Change the TTS voice."""
+        if not await self.check_permissions(interaction):
+            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
+            return
+
+        # Validate voice name
+        if voice not in EDGE_TTS_VOICES:
+            await interaction.response.send_message(
+                f"Invalid voice. Use `/pred set_voice` with autocomplete to see available voices.",
+                ephemeral=True
+            )
+            return
+
+        # Update voice setting
+        self.bot.config_manager.update_server_setting(
+            interaction.guild.id,
+            'settings.tts_settings.voice_name',
+            voice
+        )
+
+        # Create response embed
+        embed = discord.Embed(
+            title="Voice Changed",
+            description=f"✅ Voice set to: **{EDGE_TTS_VOICES[voice]}**",
+            color=discord.Color.green()
+        )
+
+        embed.add_field(
+            name="Voice ID",
+            value=f"`{voice}`",
+            inline=False
+        )
+
+        embed.set_footer(text="Use /pred test_voice to hear the new voice")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @set_voice.autocomplete('voice')
+    async def voice_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        """Autocomplete for available voices."""
+        # Filter voices based on current input
+        filtered = [
+            (voice_id, description)
+            for voice_id, description in EDGE_TTS_VOICES.items()
+            if current.lower() in voice_id.lower() or current.lower() in description.lower()
+        ]
+
+        # Sort to show Indian voices first
+        filtered.sort(key=lambda x: (
+            0 if 'Indian' in x[1] or 'Hindi' in x[1] else 1,
+            x[1]
+        ))
+
+        return [
+            app_commands.Choice(name=description, value=voice_id)
+            for voice_id, description in filtered[:25]  # Discord limits to 25 choices
+        ]
+
     @app_commands.command(name="set_tts")
     @app_commands.describe(
         speed="Voice speed (0.5 = half speed, 1.0 = normal, up to 2.0 = double speed)",
-        language="Voice language",
-        accent="Voice accent",
+        pitch="Voice pitch (0.5 = low, 1.0 = normal, 2.0 = high)",
         warning_time="Warning time in seconds"
     )
-    async def set_tts(self, interaction: discord.Interaction, 
-                    language: Optional[str] = None,
-                    accent: Optional[str] = None,
-                    warning_time: Optional[int] = None,
-                    speed: Optional[float] = None):
-        """Configure TTS settings."""
+    async def set_tts(self, interaction: discord.Interaction,
+                    speed: Optional[float] = None,
+                    pitch: Optional[float] = None,
+                    warning_time: Optional[int] = None):
+        """Configure TTS speed, pitch, and timing settings."""
         if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify settings!")
+            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
             return
-        
+
         # Get current settings first
         config = self.bot.config_manager.get_server_config(interaction.guild.id)
         current_settings = config['settings'].get('tts_settings', {})
-        
+
         # Prepare new settings, starting with current settings
         settings = current_settings.copy()
-        error_message = None
-        
+
         # Validate speed and update
         if speed is not None:
             if 0.5 <= speed <= 2.0:
@@ -318,63 +386,63 @@ class GameCommands(app_commands.Group):
                     ephemeral=True
                 )
                 return
-        
-        # Validate language and accent combination
-        if language and accent:
-            if (language, accent) not in VALID_LANG_ACCENT_PAIRS:
-                error_message = f"Invalid language ({language}) and accent ({accent}) combination"
+
+        # Validate pitch and update
+        if pitch is not None:
+            if 0.5 <= pitch <= 2.0:
+                settings['pitch'] = pitch
             else:
-                settings['language'] = language
-                settings['accent'] = accent
-        elif language:
-            settings['language'] = language
-        elif accent:
-            settings['accent'] = accent
-            
-        if error_message:
-            await interaction.response.send_message(error_message, ephemeral=True)
-            return
-            
+                await interaction.response.send_message(
+                    "Pitch must be between 0.5 (low) and 2.0 (high)",
+                    ephemeral=True
+                )
+                return
+
         if warning_time is not None:
             settings['warning_time'] = max(0, min(60, warning_time))
-        
+
         # Update the settings
         self.bot.config_manager.update_server_setting(
             interaction.guild.id,
             'settings.tts_settings',
             settings
         )
-        
+
         # Create response embed
         embed = discord.Embed(
             title="TTS Settings Updated",
             color=discord.Color.green()
         )
-        
-        # Get the display name for the language-accent combination
-        lang_accent_name = VALID_LANG_ACCENT_PAIRS.get(
-            (settings.get('language'), settings.get('accent')),
-            f"{settings.get('language', 'en')} ({settings.get('accent', 'co.in')})"
-        )
-        
+
+        # Get current voice
+        voice_id = settings.get('voice_name', 'en-IN-NeerjaNeural')
+        voice_name = EDGE_TTS_VOICES.get(voice_id, voice_id)
+
         embed.add_field(
-            name="Voice Settings",
-            value=f"Language/Accent: {lang_accent_name}",
+            name="Current Voice",
+            value=voice_name,
             inline=False
         )
         embed.add_field(
-            name="Speed", 
-            value=f"{settings.get('speed', 1.0)}x", 
+            name="Speed",
+            value=f"{settings.get('speed', 1.0)}x",
+            inline=True
+        )
+        embed.add_field(
+            name="Pitch",
+            value=f"{settings.get('pitch', 1.0)}x",
             inline=True
         )
         if warning_time is not None:
             embed.add_field(
-                name="Warning Time", 
-                value=f"{settings.get('warning_time', 30)}s", 
+                name="Warning Time",
+                value=f"{settings.get('warning_time', 30)}s",
                 inline=True
             )
-        
-        await interaction.response.send_message(embed=embed)
+
+        embed.set_footer(text="Use /pred set_voice to change the voice")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @set_tts.autocomplete('speed')
     async def speed_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:

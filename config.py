@@ -67,7 +67,32 @@ class TTSSpeed(Enum):
     FAST = 1.25
     VERY_FAST = 1.5
 
-# Language-Accent valid combinations
+# Edge-TTS Voice Options
+EDGE_TTS_VOICES = {
+    # Indian Voices (English)
+    'en-IN-NeerjaNeural': 'Indian Female (Neerja) - Clear, Professional',
+    'en-IN-PrabhatNeural': 'Indian Male (Prabhat) - Deep, Authoritative',
+
+    # Hindi Voices
+    'hi-IN-SwaraNeural': 'Hindi Female (Swara) - Natural',
+    'hi-IN-MadhurNeural': 'Hindi Male (Madhur) - Clear',
+
+    # American English (Popular for esports)
+    'en-US-AriaNeural': 'American Female (Aria) - Friendly, Clear',
+    'en-US-GuyNeural': 'American Male (Guy) - Deep, Caster-like',
+    'en-US-JennyNeural': 'American Female (Jenny) - Professional',
+    'en-US-DavisNeural': 'American Male (Davis) - Energetic, Young',
+
+    # British English
+    'en-GB-SoniaNeural': 'British Female (Sonia) - Professional',
+    'en-GB-RyanNeural': 'British Male (Ryan) - Clear, Energetic',
+
+    # Australian English
+    'en-AU-NatashaNeural': 'Australian Female (Natasha) - Friendly',
+    'en-AU-WilliamNeural': 'Australian Male (William) - Relaxed',
+}
+
+# Language-Accent valid combinations (kept for backwards compatibility)
 VALID_LANG_ACCENT_PAIRS = {
     # English combinations
     ('en', 'com.au'): "English (Australia)",
@@ -105,8 +130,9 @@ DEFAULT_CONFIG = {
         'secondary_owners': [],
         'bot_inviter': None,  # Track who invited the bot
         'tts_settings': {
+            'voice_name': 'en-IN-NeerjaNeural',  # Indian female voice (Edge-TTS)
             'language': TTSLanguage.ENGLISH.value,
-            'accent': TTSAccent.AMERICAN.value,
+            'accent': TTSAccent.INDIAN.value,
             'warning_time': 0,
             'speed': 1.0,
             'pitch': 1.0,
@@ -456,6 +482,7 @@ class ConfigManager:
             
             # Add new TTS settings if they don't exist
             default_tts = {
+                'voice_name': 'en-IN-NeerjaNeural',  # Indian female voice
                 'language': 'en',
                 'accent': 'co.in',
                 'warning_time': 30,
