@@ -67,7 +67,117 @@ class TTSSpeed(Enum):
     FAST = 1.25
     VERY_FAST = 1.5
 
-# Language-Accent valid combinations
+# Edge-TTS Voice Options
+EDGE_TTS_VOICES = {
+    # Indian Voices (English)
+    'en-IN-NeerjaNeural': 'Indian Female (Neerja) - Clear, Professional',
+    'en-IN-PrabhatNeural': 'Indian Male (Prabhat) - Deep, Authoritative',
+
+    # Hindi Voices
+    'hi-IN-SwaraNeural': 'Hindi Female (Swara) - Natural',
+    'hi-IN-MadhurNeural': 'Hindi Male (Madhur) - Clear',
+
+    # American English (Popular for esports)
+    'en-US-AriaNeural': 'American Female (Aria) - Friendly, Clear',
+    'en-US-GuyNeural': 'American Male (Guy) - Deep, Caster-like',
+    'en-US-JennyNeural': 'American Female (Jenny) - Professional',
+    'en-US-DavisNeural': 'American Male (Davis) - Energetic, Young',
+
+    # British English
+    'en-GB-SoniaNeural': 'British Female (Sonia) - Professional',
+    'en-GB-RyanNeural': 'British Male (Ryan) - Clear, Energetic',
+
+    # Australian English
+    'en-AU-NatashaNeural': 'Australian Female (Natasha) - Friendly',
+    'en-AU-WilliamNeural': 'Australian Male (William) - Relaxed',
+}
+
+# Voice Presets for Easy Selection
+VOICE_PRESETS = {
+    # Indian Presets (Default)
+    'indian-female': {
+        'voice_name': 'en-IN-NeerjaNeural',
+        'description': '🇮🇳 Indian Female - Clear, Professional (Neerja)',
+        'speed': 1.0,
+        'pitch': 1.0
+    },
+    'indian-male': {
+        'voice_name': 'en-IN-PrabhatNeural',
+        'description': '🇮🇳 Indian Male - Deep, Authoritative (Prabhat)',
+        'speed': 1.0,
+        'pitch': 1.0
+    },
+
+    # Hindi Presets
+    'hindi-female': {
+        'voice_name': 'hi-IN-SwaraNeural',
+        'description': '🇮🇳 Hindi Female - Natural (Swara)',
+        'speed': 1.0,
+        'pitch': 1.0
+    },
+    'hindi-male': {
+        'voice_name': 'hi-IN-MadhurNeural',
+        'description': '🇮🇳 Hindi Male - Clear (Madhur)',
+        'speed': 1.0,
+        'pitch': 1.0
+    },
+
+    # American Esports Presets
+    'esports-caster': {
+        'voice_name': 'en-US-GuyNeural',
+        'description': '🎮 Esports Caster - Deep, Professional (Guy)',
+        'speed': 1.1,
+        'pitch': 0.95
+    },
+    'hype-voice': {
+        'voice_name': 'en-US-DavisNeural',
+        'description': '🔥 Hype Voice - Energetic, Young (Davis)',
+        'speed': 1.15,
+        'pitch': 1.05
+    },
+    'american-female': {
+        'voice_name': 'en-US-AriaNeural',
+        'description': '🇺🇸 American Female - Friendly, Clear (Aria)',
+        'speed': 1.0,
+        'pitch': 1.0
+    },
+    'professional-female': {
+        'voice_name': 'en-US-JennyNeural',
+        'description': '🎙️ Professional Female - Broadcast Quality (Jenny)',
+        'speed': 1.0,
+        'pitch': 1.0
+    },
+
+    # British Presets
+    'british-male': {
+        'voice_name': 'en-GB-RyanNeural',
+        'description': '🇬🇧 British Male - Clear, Energetic (Ryan)',
+        'speed': 1.0,
+        'pitch': 1.0
+    },
+    'british-female': {
+        'voice_name': 'en-GB-SoniaNeural',
+        'description': '🇬🇧 British Female - Professional (Sonia)',
+        'speed': 1.0,
+        'pitch': 1.0
+    },
+
+    # Australian Presets
+    'australian-male': {
+        'voice_name': 'en-AU-WilliamNeural',
+        'description': '🇦🇺 Australian Male - Relaxed (William)',
+        'speed': 1.0,
+        'pitch': 1.0
+    },
+    'australian-female': {
+        'voice_name': 'en-AU-NatashaNeural',
+        'description': '🇦🇺 Australian Female - Friendly (Natasha)',
+        'speed': 1.0,
+        'pitch': 1.0
+    },
+}
+
+# Language-Accent valid combinations (kept for backwards compatibility)
 VALID_LANG_ACCENT_PAIRS = {
     # English combinations
     ('en', 'com.au'): "English (Australia)",
@@ -105,8 +215,9 @@ DEFAULT_CONFIG = {
         'secondary_owners': [],
         'bot_inviter': None,  # Track who invited the bot
         'tts_settings': {
+            'voice_name': 'en-IN-NeerjaNeural',  # Indian female voice (Edge-TTS)
             'language': TTSLanguage.ENGLISH.value,
-            'accent': TTSAccent.AMERICAN.value,
+            'accent': TTSAccent.INDIAN.value,
             'warning_time': 0,
             'speed': 1.0,
             'pitch': 1.0,
@@ -456,6 +567,7 @@ class ConfigManager:
             
             # Add new TTS settings if they don't exist
             default_tts = {
+                'voice_name': 'en-IN-NeerjaNeural',  # Indian female voice
                 'language': 'en',
                 'accent': 'co.in',
                 'warning_time': 30,

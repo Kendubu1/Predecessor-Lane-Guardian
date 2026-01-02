@@ -1,5 +1,5 @@
 discord.py[voice]
-gTTS
+edge-tts
 ffmpeg-python
 PyNaCl
 python-dotenv
