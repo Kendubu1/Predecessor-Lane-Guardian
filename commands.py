@@ -445,28 +445,34 @@ class GameCommands(app_commands.Group):
     @app_commands.describe(
         speed="Voice speed (0.5 = half speed, 1.0 = normal, up to 2.0 = double speed)",
         pitch="Voice pitch (0.5 = low, 1.0 = normal, 2.0 = high)",
-        warning_time="Warning time in seconds"
+        volume="Announcement volume (0.0 = muted, 1.0 = full volume)",
+        numbers_as_words="Convert numbers to words (True = 'three', False = '3')",
+        emphasis_level="How much louder keywords are (1.0 = normal, 2.0 = 2x louder)"
     )
     async def set_tts(self, interaction: discord.Interaction,
                     speed: Optional[float] = None,
                     pitch: Optional[float] = None,
-                    warning_time: Optional[int] = None):
-        """Configure TTS speed, pitch, and timing settings."""
+                    volume: Optional[float] = None,
+                    numbers_as_words: Optional[bool] = None,
+                    emphasis_level: Optional[float] = None):
+        """Configure TTS voice settings (speed, pitch, volume, number pronunciation, emphasis)."""
         if not await self.check_permissions(interaction):
             await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
             return
 
         # Get current settings first
         config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        current_settings = config['settings'].get('tts_settings', {})
+        current_tts_settings = config['settings'].get('tts_settings', {})
+        tts_settings = current_tts_settings.copy()
 
-        # Prepare new settings, starting with current settings
-        settings = current_settings.copy()
+        # Track what changed for response message
+        changes = []
 
         # Validate speed and update
         if speed is not None:
             if 0.5 <= speed <= 2.0:
-                settings['speed'] = speed
+                tts_settings['speed'] = speed
+                changes.append(f"Speed: {speed}x")
             else:
                 await interaction.response.send_message(
                     "Speed must be between 0.5 (half speed) and 2.0 (double speed)",
@@ -477,7 +483,8 @@ class GameCommands(app_commands.Group):
         # Validate pitch and update
         if pitch is not None:
             if 0.5 <= pitch <= 2.0:
-                settings['pitch'] = pitch
+                tts_settings['pitch'] = pitch
+                changes.append(f"Pitch: {pitch}x")
             else:
                 await interaction.response.send_message(
                     "Pitch must be between 0.5 (low) and 2.0 (high)",
@@ -485,49 +492,93 @@ class GameCommands(app_commands.Group):
                 )
                 return
 
-        if warning_time is not None:
-            settings['warning_time'] = max(0, min(60, warning_time))
+        # Validate volume and update (also update main volume setting)
+        if volume is not None:
+            if 0.0 <= volume <= 1.0:
+                self.bot.config_manager.update_server_setting(
+                    interaction.guild.id,
+                    'settings.volume',
+                    volume
+                )
+                changes.append(f"Volume: {volume:.1f}")
+            else:
+                await interaction.response.send_message(
+                    "Volume must be between 0.0 (muted) and 1.0 (full)",
+                    ephemeral=True
+                )
+                return
 
-        # Update the settings
+        # Update numbers_as_words
+        if numbers_as_words is not None:
+            tts_settings['number_to_words'] = numbers_as_words
+            changes.append(f"Numbers: {'words' if numbers_as_words else 'digits'}")
+
+        # Validate emphasis_level and update
+        if emphasis_level is not None:
+            if 1.0 <= emphasis_level <= 2.0:
+                tts_settings['emphasis_volume'] = emphasis_level
+                changes.append(f"Emphasis: {emphasis_level}x")
+            else:
+                await interaction.response.send_message(
+                    "Emphasis level must be between 1.0 (no emphasis) and 2.0 (2x louder)",
+                    ephemeral=True
+                )
+                return
+
+        # Update the TTS settings
         self.bot.config_manager.update_server_setting(
             interaction.guild.id,
             'settings.tts_settings',
-            settings
+            tts_settings
         )
 
         # Create response embed
         embed = discord.Embed(
-            title="TTS Settings Updated",
+            title="✅ TTS Settings Updated",
             color=discord.Color.green()
         )
 
-        # Get current voice
-        voice_id = settings.get('voice_name', 'en-IN-NeerjaNeural')
-        voice_name = EDGE_TTS_VOICES.get(voice_id, voice_id)
+        if changes:
+            embed.description = "**Changed:**\n" + "\n".join(f"• {change}" for change in changes)
 
+        # Get current voice
+        voice_id = tts_settings.get('voice_name', 'en-IN-NeerjaNeural')
+        voice_name = EDGE_TTS_VOICES.get(voice_id, voice_id)
+        current_volume = config['settings'].get('volume', 1.0)
+
+        # Show all current settings
         embed.add_field(
-            name="Current Voice",
+            name="🎤 Current Voice",
             value=voice_name,
             inline=False
         )
         embed.add_field(
-            name="Speed",
-            value=f"{settings.get('speed', 1.0)}x",
+            name="⚡ Speed",
+            value=f"{tts_settings.get('speed', 1.0)}x",
             inline=True
         )
         embed.add_field(
-            name="Pitch",
-            value=f"{settings.get('pitch', 1.0)}x",
+            name="🎵 Pitch",
+            value=f"{tts_settings.get('pitch', 1.0)}x",
             inline=True
         )
-        if warning_time is not None:
-            embed.add_field(
-                name="Warning Time",
-                value=f"{settings.get('warning_time', 30)}s",
-                inline=True
-            )
+        embed.add_field(
+            name="🔊 Volume",
+            value=f"{current_volume:.1f}",
+            inline=True
+        )
+        embed.add_field(
+            name="🔢 Numbers",
+            value="Words" if tts_settings.get('number_to_words', True) else "Digits",
+            inline=True
+        )
+        embed.add_field(
+            name="📢 Emphasis",
+            value=f"{tts_settings.get('emphasis_volume', 1.2)}x",
+            inline=True
+        )
 
-        embed.set_footer(text="Use /pred set_voice to change the voice")
+        embed.set_footer(text="💡 Use /pred voice_preset for quick setup | /pred set_voice to change voice")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -603,36 +654,6 @@ class GameCommands(app_commands.Group):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="set_volume")
-    async def set_volume(self, interaction: discord.Interaction, volume: float):
-        """Set the announcement volume (0.0 - 1.0)."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
-            return
-
-        volume = max(0.0, min(1.0, volume))
-        self.bot.config_manager.update_server_setting(
-            interaction.guild.id,
-            'settings.volume',
-            volume
-        )
-
-        await interaction.response.send_message(f"Volume set to {volume:.1f}", ephemeral=True)
-
-    @app_commands.command(name="test_voice")
-    async def test_voice(self, interaction: discord.Interaction, message: Optional[str] = "This is a test"):
-        """Play a test voice line using current settings."""
-        if not interaction.user.voice:
-            await interaction.response.send_message("You need to be in a voice channel!", ephemeral=True)
-            return
-
-        voice_channel = interaction.user.voice.channel
-        voice_client = await self.bot.voice_service.ensure_voice_client(voice_channel)
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-
-        await interaction.response.send_message("Playing test message...", ephemeral=True)
-        await self.bot.voice_service.play_announcement(voice_client, message, config['settings'])
-
     @app_commands.command(name="remove_admin")
     async def remove_admin(self, interaction: discord.Interaction, user: discord.User):
         """Remove a user from bot admins."""
@@ -678,6 +699,29 @@ class GameCommands(app_commands.Group):
         )
 
         await interaction.response.send_message(f"Added {role.name} as an admin role.", ephemeral=True)
+
+    @app_commands.command(name="remove_admin_role")
+    async def remove_admin_role(self, interaction: discord.Interaction, role: discord.Role):
+        """Remove a role from bot admins."""
+        if not await self.check_permissions(interaction):
+            await interaction.response.send_message("You don't have permission to modify admin roles!", ephemeral=True)
+            return
+
+        config = self.bot.config_manager.get_server_config(interaction.guild.id)
+        admin_roles = config['settings'].get('admin_roles', [])
+
+        if role.id not in admin_roles:
+            await interaction.response.send_message(f"{role.name} is not an admin role!", ephemeral=True)
+            return
+
+        admin_roles.remove(role.id)
+        self.bot.config_manager.update_server_setting(
+            interaction.guild.id,
+            'settings.admin_roles',
+            admin_roles
+        )
+
+        await interaction.response.send_message(f"Removed {role.name} from admin roles.", ephemeral=True)
 
     @app_commands.command(name="sync_admins")
     async def sync_admins(self, interaction: discord.Interaction):
@@ -734,46 +778,6 @@ class GameCommands(app_commands.Group):
                 f"Error syncing admins: {str(e)}",
                 ephemeral=True
             )
-
-    @app_commands.command(name="edit_timer")
-    @app_commands.choices(category=[
-        app_commands.Choice(name=cat.name.title(), value=cat.value)
-        for cat in TimerCategory
-    ])
-    async def edit_timer(self, interaction: discord.Interaction,
-                         name: str, time: str, message: Optional[str] = None,
-                         category: str = TimerCategory.REMINDER.value):
-        """Edit an existing timer."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify timers!", ephemeral=True)
-            return
-
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        timer = config.get('timers', {}).get(name)
-        if not timer:
-            await interaction.response.send_message(f"Timer '{name}' not found", ephemeral=True)
-            return
-
-        try:
-            minutes, seconds = map(int, time.split(':'))
-            total_seconds = minutes * 60 + seconds
-        except ValueError:
-            await interaction.response.send_message("Invalid time format. Use M:SS (e.g., 5:30)", ephemeral=True)
-            return
-
-        messages = timer.get('messages', [])
-        if message:
-            messages = [message]
-
-        self.bot.config_manager.update_timer(
-            interaction.guild.id,
-            name,
-            total_seconds,
-            messages,
-            category
-        )
-
-        await interaction.response.send_message(f"Timer '{name}' updated", ephemeral=True)
 
     @app_commands.command(name="start")
     @app_commands.describe(
@@ -1202,6 +1206,129 @@ class GameCommands(app_commands.Group):
                     f"Error: {str(e)}", 
                     ephemeral=True
                 )
+
+    @app_commands.command(name="pronunciation_add")
+    @app_commands.describe(
+        word="The word or phrase to replace",
+        replacement="How it should be pronounced"
+    )
+    async def pronunciation_add(self, interaction: discord.Interaction, word: str, replacement: str):
+        """Add a custom pronunciation for a word or phrase (e.g., 'OP' → 'O P')."""
+        if not await self.check_permissions(interaction):
+            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
+            return
+
+        # Get current config
+        config = self.bot.config_manager.get_server_config(interaction.guild.id)
+        tts_settings = config['settings'].get('tts_settings', {})
+        pronunciations = tts_settings.get('custom_pronunciations', {})
+
+        # Add the pronunciation
+        pronunciations[word] = replacement
+        tts_settings['custom_pronunciations'] = pronunciations
+
+        # Save
+        self.bot.config_manager.update_server_setting(
+            interaction.guild.id,
+            'settings.tts_settings',
+            tts_settings
+        )
+
+        # Response
+        embed = discord.Embed(
+            title="✅ Pronunciation Added",
+            description=f"**{word}** will now be pronounced as **{replacement}**",
+            color=discord.Color.green()
+        )
+        embed.add_field(
+            name="Total Custom Pronunciations",
+            value=str(len(pronunciations)),
+            inline=True
+        )
+        embed.set_footer(text="Use /pred pronunciation_list to see all pronunciations")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="pronunciation_remove")
+    @app_commands.describe(
+        word="The word to remove custom pronunciation for"
+    )
+    async def pronunciation_remove(self, interaction: discord.Interaction, word: str):
+        """Remove a custom pronunciation."""
+        if not await self.check_permissions(interaction):
+            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
+            return
+
+        # Get current config
+        config = self.bot.config_manager.get_server_config(interaction.guild.id)
+        tts_settings = config['settings'].get('tts_settings', {})
+        pronunciations = tts_settings.get('custom_pronunciations', {})
+
+        # Check if word exists
+        if word not in pronunciations:
+            await interaction.response.send_message(
+                f"No custom pronunciation found for **{word}**",
+                ephemeral=True
+            )
+            return
+
+        # Remove the pronunciation
+        removed_value = pronunciations.pop(word)
+        tts_settings['custom_pronunciations'] = pronunciations
+
+        # Save
+        self.bot.config_manager.update_server_setting(
+            interaction.guild.id,
+            'settings.tts_settings',
+            tts_settings
+        )
+
+        # Response
+        embed = discord.Embed(
+            title="✅ Pronunciation Removed",
+            description=f"Removed: **{word}** → ~~{removed_value}~~",
+            color=discord.Color.green()
+        )
+        embed.set_footer(text="The word will now use default TTS pronunciation")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="pronunciation_list")
+    async def pronunciation_list(self, interaction: discord.Interaction):
+        """List all custom pronunciations for this server."""
+        # Get current config
+        config = self.bot.config_manager.get_server_config(interaction.guild.id)
+        tts_settings = config['settings'].get('tts_settings', {})
+        pronunciations = tts_settings.get('custom_pronunciations', {})
+
+        # Create embed
+        embed = discord.Embed(
+            title="📝 Custom Pronunciations",
+            color=discord.Color.blue()
+        )
+
+        if not pronunciations:
+            embed.description = "No custom pronunciations configured.\n\nUse `/pred pronunciation_add` to add game-specific terms like:\n• `OP` → `O P`\n• `ADC` → `A D C`\n• `GG` → `good game`"
+        else:
+            # Sort alphabetically
+            sorted_pronunciations = sorted(pronunciations.items())
+
+            # Create formatted list
+            pronunciation_list = "\n".join(
+                f"• **{word}** → {replacement}"
+                for word, replacement in sorted_pronunciations
+            )
+
+            embed.description = pronunciation_list
+            embed.add_field(
+                name="Total",
+                value=str(len(pronunciations)),
+                inline=True
+            )
+
+        embed.set_footer(text="Use /pred say to test pronunciations")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @list_timers.autocomplete('category')
     async def category_autocomplete(self, 
