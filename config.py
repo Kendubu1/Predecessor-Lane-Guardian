@@ -216,20 +216,13 @@ DEFAULT_CONFIG = {
         'bot_inviter': None,  # Track who invited the bot
         'tts_settings': {
             'voice_name': 'en-IN-NeerjaNeural',  # Indian female voice (Edge-TTS)
-            'language': TTSLanguage.ENGLISH.value,
-            'accent': TTSAccent.INDIAN.value,
-            'warning_time': 0,
+            'language': TTSLanguage.ENGLISH.value,  # Legacy (backwards compatibility)
+            'accent': TTSAccent.INDIAN.value,  # Legacy (backwards compatibility)
             'speed': 1.0,
             'pitch': 1.0,
-            'word_gap': 0.1,
-            'emphasis_volume': 1.2,
-            'use_phonetics': False,
-            'capitalize_proper_nouns': True,
-            'number_to_words': True,
-            'custom_pronunciations': {
-                'Fangtooth': 'Fang tooth',
-                'Orb Prime': 'Orb Prime',
-            }
+            'number_to_words': True,  # Convert "3" to "three"
+            'emphasis_volume': 1.2,  # Make keywords louder (1.0-2.0)
+            'custom_pronunciations': {}  # Dict of custom word replacements
         }
     },
     'timers': {
@@ -568,17 +561,13 @@ class ConfigManager:
             # Add new TTS settings if they don't exist
             default_tts = {
                 'voice_name': 'en-IN-NeerjaNeural',  # Indian female voice
-                'language': 'en',
-                'accent': 'co.in',
-                'warning_time': 30,
+                'language': 'en',  # Legacy (backwards compatibility)
+                'accent': 'co.in',  # Legacy (backwards compatibility)
                 'speed': 1.0,
                 'pitch': 1.0,
-                'word_gap': 0.1,
-                'emphasis_volume': 1.2,
-                'use_phonetics': False,
-                'capitalize_proper_nouns': True,
-                'number_to_words': True,
-                'custom_pronunciations': {}
+                'number_to_words': True,  # Convert "3" to "three"
+                'emphasis_volume': 1.2,  # Make keywords louder (1.0-2.0)
+                'custom_pronunciations': {}  # Dict of custom word replacements
             }
             
             for key, default_value in default_tts.items():
