@@ -101,7 +101,9 @@ DEFAULT_CONFIG = {
     'settings': {
         'volume': 1.0,
         'admin_roles': [],
+        'admin_users': [],
         'secondary_owners': [],
+        'bot_inviter': None,  # Track who invited the bot
         'tts_settings': {
             'language': TTSLanguage.ENGLISH.value,
             'accent': TTSAccent.AMERICAN.value,
@@ -484,6 +486,10 @@ class ConfigManager:
             if 'secondary_owners' not in migrated['settings']:
                 migrated['settings']['secondary_owners'] = []
                 was_migrated = True
+
+            if 'bot_inviter' not in migrated['settings']:
+                migrated['settings']['bot_inviter'] = None
+                was_migrated = True
                 
             if was_migrated:
                 logger.info("Config was migrated to new format")
@@ -528,30 +534,13 @@ class ConfigManager:
 
         current = self.configs[server_id]
         *parts, last = path.split('.')
-        
+
         for part in parts:
             if part not in current:
                 current[part] = {}
             current = current[part]
-        
+
         current[last] = value
-        self.save_configs()
-
-    def update_timer(self, server_id: int, timer_name: str, time: int, 
-                    message: str, category: str) -> None:
-        """Update or create a timer for a server."""
-        server_id = str(server_id)
-        if server_id not in self.configs:
-            self.configs[server_id] = copy.deepcopy(DEFAULT_CONFIG)
-        
-        if 'timers' not in self.configs[server_id]:
-            self.configs[server_id]['timers'] = {}
-
-        self.configs[server_id]['timers'][timer_name] = {
-            'time': time,
-            'message': message,
-            'category': category
-        }
         self.save_configs()
 
     def remove_timer(self, server_id: int, timer_name: str) -> bool:
@@ -601,13 +590,13 @@ class ConfigManager:
             
         return validated
     
-    def update_timer(self, server_id: int, timer_name: str, time: int, 
+    def update_timer(self, server_id: int, timer_name: str, time: int,
                 messages: list[str] | str, category: str) -> None:
         """Update or create a timer for a server."""
         server_id = str(server_id)
         if server_id not in self.configs:
             self.configs[server_id] = copy.deepcopy(DEFAULT_CONFIG)
-        
+
         if 'timers' not in self.configs[server_id]:
             self.configs[server_id]['timers'] = {}
 
@@ -621,3 +610,63 @@ class ConfigManager:
             'category': category
         }
         self.save_configs()
+
+    def sync_discord_admins(self, guild) -> int:
+        """
+        Sync Discord administrators to bot admin list.
+        Returns the number of new admins added.
+        """
+        server_id = str(guild.id)
+        config = self.get_server_config(guild.id)
+        admin_users = set(config.get('settings', {}).get('admin_users', []))
+        initial_count = len(admin_users)
+
+        # Always include server owner
+        admin_users.add(guild.owner_id)
+
+        # Add all members with Administrator permission
+        for member in guild.members:
+            if member.guild_permissions.administrator:
+                admin_users.add(member.id)
+                logger.info(f"Auto-added Discord admin: {member.name} ({member.id}) to guild {guild.id}")
+
+        # Add secondary owners if configured
+        secondary_owners = config.get('settings', {}).get('secondary_owners', [])
+        for owner_id in secondary_owners:
+            admin_users.add(owner_id)
+
+        # Update config if there are changes
+        new_count = len(admin_users)
+        if new_count > initial_count:
+            self.update_server_setting(
+                guild.id,
+                'settings.admin_users',
+                list(admin_users)
+            )
+            logger.info(f"Synced {new_count - initial_count} new admin(s) for guild {guild.id}")
+
+        return new_count - initial_count
+
+    def add_bot_inviter(self, guild_id: int, inviter_id: int) -> None:
+        """
+        Record who invited the bot and grant them admin access.
+        """
+        server_id = str(guild_id)
+        config = self.get_server_config(guild_id)
+
+        # Record the inviter
+        current_inviter = config.get('settings', {}).get('bot_inviter')
+        if current_inviter is None:
+            self.update_server_setting(guild_id, 'settings.bot_inviter', inviter_id)
+            logger.info(f"Recorded bot inviter: {inviter_id} for guild {guild_id}")
+
+        # Add inviter to admin users
+        admin_users = set(config.get('settings', {}).get('admin_users', []))
+        if inviter_id not in admin_users:
+            admin_users.add(inviter_id)
+            self.update_server_setting(
+                guild_id,
+                'settings.admin_users',
+                list(admin_users)
+            )
+            logger.info(f"Granted admin access to bot inviter: {inviter_id} for guild {guild_id}")

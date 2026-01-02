@@ -154,12 +154,40 @@ class PredecessorBot(commands.Bot):
                 # Start background tasks
                 logger.info("Starting background tasks...")
                 self.check_timers.start('standard')
-                
+                self.daily_admin_sync.start()
+
                 logger.info("Setup complete!")
-                
+
             except Exception as e:
                 logger.error(f"Error in setup_hook: {e}", exc_info=True)
                 raise
+
+    async def _detect_bot_inviter(self, guild: discord.Guild) -> None:
+        """
+        Try to detect who invited the bot by checking audit logs.
+        """
+        try:
+            # Check if we already have an inviter recorded
+            config = self.config_manager.get_server_config(guild.id)
+            existing_inviter = config.get('settings', {}).get('bot_inviter')
+            if existing_inviter is not None:
+                logger.debug(f"Bot inviter already recorded for guild {guild.id}: {existing_inviter}")
+                return
+
+            # Check audit logs for bot integration creation
+            async for entry in guild.audit_logs(limit=50, action=discord.AuditLogAction.bot_add):
+                if entry.target.id == self.user.id:
+                    inviter_id = entry.user.id
+                    self.config_manager.add_bot_inviter(guild.id, inviter_id)
+                    logger.info(f"Detected bot inviter from audit log: {entry.user.name} ({inviter_id}) for guild {guild.id}")
+                    return
+
+            logger.warning(f"Could not detect bot inviter from audit logs for guild {guild.id}")
+
+        except discord.Forbidden:
+            logger.warning(f"Missing permissions to read audit logs for guild {guild.id}")
+        except Exception as e:
+            logger.error(f"Error detecting bot inviter for guild {guild.id}: {e}")
 
     async def on_ready(self):
         """Called when the bot is ready and connected to Discord."""
@@ -172,50 +200,34 @@ class PredecessorBot(commands.Bot):
             logger.error(f"Error syncing commands in on_ready: {e}")
         logger.info('------')
 
-        # Ensure each guild owner and configured secondary owners
-        # are recorded as admin users
+        # Sync Discord admins for all guilds on startup
         for guild in self.guilds:
-            config = self.config_manager.get_server_config(guild.id)
-            admin_users = config.get('settings', {}).get('admin_users', [])
-            secondary = config.get('settings', {}).get('secondary_owners', [])
-            updated = False
+            try:
+                # Auto-sync all Discord administrators
+                new_admins = self.config_manager.sync_discord_admins(guild)
+                if new_admins > 0:
+                    logger.info(f"Synced {new_admins} Discord admin(s) for guild {guild.name} ({guild.id})")
 
-            for owner_id in [guild.owner_id, *secondary]:
-                if owner_id not in admin_users:
-                    admin_users.append(owner_id)
-                    updated = True
+                # Try to detect bot inviter from audit logs
+                await self._detect_bot_inviter(guild)
 
-            if updated:
-                self.config_manager.update_server_setting(
-                    guild.id,
-                    'settings.admin_users',
-                    admin_users,
-                )
-                logger.info(
-                    f"Added owner IDs {secondary + [guild.owner_id]} as admins for {guild.id}"
-                )
+            except Exception as e:
+                logger.error(f"Error syncing admins for guild {guild.id}: {e}")
 
     async def on_guild_join(self, guild: discord.Guild):
-        """Automatically add the guild owner to admin list when joining."""
-        config = self.config_manager.get_server_config(guild.id)
-        admin_users = config.get('settings', {}).get('admin_users', [])
-        secondary = config.get('settings', {}).get('secondary_owners', [])
-        updated = False
+        """Automatically sync admins when bot joins a guild."""
+        try:
+            logger.info(f"Joined new guild: {guild.name} ({guild.id})")
 
-        for owner_id in [guild.owner_id, *secondary]:
-            if owner_id not in admin_users:
-                admin_users.append(owner_id)
-                updated = True
+            # Sync all Discord administrators
+            new_admins = self.config_manager.sync_discord_admins(guild)
+            logger.info(f"Auto-synced {new_admins} Discord admin(s) for new guild {guild.name}")
 
-        if updated:
-            self.config_manager.update_server_setting(
-                guild.id,
-                'settings.admin_users',
-                admin_users,
-            )
-            logger.info(
-                f"Guild join: added owners {secondary + [guild.owner_id]} as admins for {guild.id}"
-            )
+            # Try to detect who invited the bot
+            await self._detect_bot_inviter(guild)
+
+        except Exception as e:
+            logger.error(f"Error setting up admins for new guild {guild.id}: {e}")
         
     # In main.py, update the check_timers method
     @tasks.loop(seconds=1.0)
@@ -261,6 +273,41 @@ class PredecessorBot(commands.Bot):
                         
         except Exception as e:
             logger.error(f"Error in check_timers: {e}", exc_info=True)
+
+    @tasks.loop(hours=24.0)
+    async def daily_admin_sync(self):
+        """Daily task to sync Discord administrators across all guilds."""
+        try:
+            logger.info("Starting daily admin sync for all guilds...")
+            total_synced = 0
+
+            for guild in self.guilds:
+                try:
+                    new_admins = self.config_manager.sync_discord_admins(guild)
+                    total_synced += new_admins
+
+                    if new_admins > 0:
+                        logger.info(f"Daily sync: Added {new_admins} new admin(s) to guild {guild.name} ({guild.id})")
+
+                    # Also try to detect inviter if not already recorded
+                    await self._detect_bot_inviter(guild)
+
+                except Exception as e:
+                    logger.error(f"Error in daily sync for guild {guild.id}: {e}")
+
+            if total_synced > 0:
+                logger.info(f"Daily admin sync complete: {total_synced} total new admin(s) across all guilds")
+            else:
+                logger.info("Daily admin sync complete: No new admins detected")
+
+        except Exception as e:
+            logger.error(f"Error in daily_admin_sync task: {e}", exc_info=True)
+
+    @daily_admin_sync.before_loop
+    async def before_daily_admin_sync(self):
+        """Wait until the bot is ready before starting the daily admin sync."""
+        await self.wait_until_ready()
+        logger.info("Daily admin sync task initialized")
 
 def run_bot():
     """Start the bot."""

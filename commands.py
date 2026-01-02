@@ -45,19 +45,49 @@ class GameCommands(app_commands.Group):
 
     async def check_permissions(self, interaction: discord.Interaction) -> bool:
         """Check if user has permission to use admin commands."""
+        # Guard against DM usage
+        if not interaction.guild:
+            logger.warning(f"Permission denied: {interaction.user.id} tried to use admin command in DM")
+            return False
+
+        # Server owner always has permission
         if interaction.user.id == interaction.guild.owner_id:
             return True
 
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        admin_roles = config.get('settings', {}).get('admin_roles', [])
-        admin_users = config.get('settings', {}).get('admin_users', [])
-        secondary_owners = config.get('settings', {}).get('secondary_owners', [])
-
-        if (interaction.user.id in admin_users or
-                interaction.user.id in secondary_owners):
+        # Check if user has Discord's Administrator permission (auto-grant)
+        if interaction.user.guild_permissions.administrator:
+            logger.debug(f"Permission granted via Discord Administrator: {interaction.user.id} in guild {interaction.guild.id}")
             return True
 
-        return any(role.id in admin_roles for role in interaction.user.roles)
+        # Check configured admin users and roles
+        config = self.bot.config_manager.get_server_config(interaction.guild.id)
+        settings = config.get('settings', {})
+
+        # Combine admin_users, secondary_owners, and bot_inviter
+        authorized_users = set(settings.get('admin_users', []))
+        authorized_users.update(settings.get('secondary_owners', []))
+
+        # Add bot inviter if recorded
+        bot_inviter = settings.get('bot_inviter')
+        if bot_inviter:
+            authorized_users.add(bot_inviter)
+
+        if interaction.user.id in authorized_users:
+            return True
+
+        # Check role-based permissions (custom admin roles)
+        admin_roles = set(settings.get('admin_roles', []))
+        user_role_ids = {role.id for role in interaction.user.roles}
+
+        if admin_roles & user_role_ids:  # Set intersection
+            return True
+
+        # Log denial for debugging
+        logger.debug(
+            f"Permission denied: user={interaction.user.id} ({interaction.user.name}) "
+            f"guild={interaction.guild.id} command={interaction.command.name if interaction.command else 'unknown'}"
+        )
+        return False
 
     def validate_config(self, config_data: dict) -> tuple[bool, str, dict]:
         """
@@ -80,6 +110,7 @@ class GameCommands(app_commands.Group):
                     'admin_roles': [],
                     'admin_users': [],
                     'secondary_owners': [],
+                    'bot_inviter': None,
                     'tts_settings': {
                         'language': 'en',
                         'accent': 'co.in',
@@ -132,6 +163,13 @@ class GameCommands(app_commands.Group):
                     int(user_id) for user_id in secondary_owners
                     if str(user_id).isdigit()
                 ]
+
+            # Bot inviter validation
+            bot_inviter = settings.get('bot_inviter')
+            if bot_inviter is not None and str(bot_inviter).isdigit():
+                sanitized['settings']['bot_inviter'] = int(bot_inviter)
+            else:
+                sanitized['settings']['bot_inviter'] = None
 
             # TTS settings validation
             tts_settings = settings.get('tts_settings', {})
@@ -437,9 +475,13 @@ class GameCommands(app_commands.Group):
 
         admin_roles = [f"<@&{rid}>" for rid in settings.get('admin_roles', [])]
         admin_users = [f"<@{uid}>" for uid in settings.get('admin_users', [])]
+        bot_inviter = settings.get('bot_inviter')
 
         embed.add_field(name="Admin Roles", value=', '.join(admin_roles) if admin_roles else "None", inline=False)
         embed.add_field(name="Admin Users", value=', '.join(admin_users) if admin_users else "None", inline=False)
+
+        if bot_inviter:
+            embed.add_field(name="Bot Inviter", value=f"<@{bot_inviter}>", inline=False)
 
         tts = settings.get('tts_settings', {})
         lang_acc_name = VALID_LANG_ACCENT_PAIRS.get(
@@ -447,6 +489,8 @@ class GameCommands(app_commands.Group):
             f"{tts.get('language', 'en')} ({tts.get('accent', 'co.in')})"
         )
         embed.add_field(name="TTS", value=f"{lang_acc_name} - {tts.get('speed',1.0)}x", inline=False)
+
+        embed.set_footer(text="💡 Users with Discord's Administrator permission automatically have bot admin access")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -525,6 +569,62 @@ class GameCommands(app_commands.Group):
         )
 
         await interaction.response.send_message(f"Added {role.name} as an admin role.", ephemeral=True)
+
+    @app_commands.command(name="sync_admins")
+    async def sync_admins(self, interaction: discord.Interaction):
+        """Manually sync Discord administrators to bot admin list."""
+        if not await self.check_permissions(interaction):
+            await interaction.response.send_message("You don't have permission to sync admins!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            # Sync Discord admins
+            new_admins = self.bot.config_manager.sync_discord_admins(interaction.guild)
+
+            # Try to detect bot inviter
+            await self.bot._detect_bot_inviter(interaction.guild)
+
+            # Get current admin list for display
+            config = self.bot.config_manager.get_server_config(interaction.guild.id)
+            settings = config.get('settings', {})
+            admin_users = settings.get('admin_users', [])
+            bot_inviter = settings.get('bot_inviter')
+
+            embed = discord.Embed(
+                title="Admin Sync Complete",
+                color=discord.Color.green()
+            )
+
+            if new_admins > 0:
+                embed.description = f"✅ Added {new_admins} new Discord administrator(s) to bot admin list"
+            else:
+                embed.description = "✅ All Discord administrators are already synced"
+
+            embed.add_field(
+                name="Total Bot Admins",
+                value=str(len(admin_users)),
+                inline=True
+            )
+
+            if bot_inviter:
+                embed.add_field(
+                    name="Bot Inviter",
+                    value=f"<@{bot_inviter}>",
+                    inline=True
+                )
+
+            embed.set_footer(text="Bot automatically syncs Discord admins daily")
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"Error in sync_admins command: {e}")
+            await interaction.followup.send(
+                f"Error syncing admins: {str(e)}",
+                ephemeral=True
+            )
 
     @app_commands.command(name="edit_timer")
     @app_commands.choices(category=[
