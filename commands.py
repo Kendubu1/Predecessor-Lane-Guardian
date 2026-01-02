@@ -570,55 +570,6 @@ class GameCommands(app_commands.Group):
             for value, name in filtered[:25]  # Discord limits to 25 choices
         ]
 
-    @set_tts.autocomplete('language')
-    async def language_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-        """Autocomplete for TTS languages."""
-        # Get unique languages from valid combinations
-        languages = set(lang for lang, _ in VALID_LANG_ACCENT_PAIRS.keys())
-        
-        # Filter based on current input
-        filtered = [
-            lang for lang in languages
-            if current.lower() in lang.lower()
-        ]
-        filtered.sort()
-        
-        return [
-            app_commands.Choice(name=lang, value=lang)
-            for lang in filtered[:25]
-        ]
-
-    @set_tts.autocomplete('accent')
-    async def accent_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-        """Autocomplete for TTS accents based on selected language."""
-        current_lang = interaction.namespace.language
-        
-        # Get valid accents for the current language
-        if current_lang:
-            accents = [
-                (accent, name) 
-                for (lang, accent), name in VALID_LANG_ACCENT_PAIRS.items()
-                if lang == current_lang
-            ]
-        else:
-            # If no language selected, show all accents
-            accents = [
-                (accent, name)
-                for (_, accent), name in VALID_LANG_ACCENT_PAIRS.items()
-            ]
-        
-        # Filter based on current input
-        filtered = [
-            (accent, name) for accent, name in accents
-            if current.lower() in name.lower()
-        ]
-        filtered.sort(key=lambda x: x[1])  # Sort by display name
-        
-        return [
-            app_commands.Choice(name=name, value=accent)
-            for accent, name in filtered[:25]
-        ]
-
     @app_commands.command(name="settings")
     async def settings(self, interaction: discord.Interaction):
         """Show the current server settings."""
@@ -639,11 +590,14 @@ class GameCommands(app_commands.Group):
             embed.add_field(name="Bot Inviter", value=f"<@{bot_inviter}>", inline=False)
 
         tts = settings.get('tts_settings', {})
-        lang_acc_name = VALID_LANG_ACCENT_PAIRS.get(
-            (tts.get('language'), tts.get('accent')),
-            f"{tts.get('language', 'en')} ({tts.get('accent', 'co.in')})"
+        voice_name = tts.get('voice_name', 'en-IN-NeerjaNeural')
+        speed = tts.get('speed', 1.0)
+        pitch = tts.get('pitch', 1.0)
+        embed.add_field(
+            name="TTS Voice",
+            value=f"🎤 {voice_name}\n⚡ Speed: {speed}x | 🎵 Pitch: {pitch}x",
+            inline=False
         )
-        embed.add_field(name="TTS", value=f"{lang_acc_name} - {tts.get('speed',1.0)}x", inline=False)
 
         embed.set_footer(text="💡 Users with Discord's Administrator permission automatically have bot admin access")
 
@@ -1153,18 +1107,14 @@ class GameCommands(app_commands.Group):
             
             timer_count = len(sanitized_config.get('timers', {}))
             tts_settings = sanitized_config['settings']['tts_settings']
-            
-            # Get the display name for the language-accent combination
-            lang_accent_name = VALID_LANG_ACCENT_PAIRS.get(
-                (tts_settings['language'], tts_settings['accent']),
-                f"{tts_settings['language']} ({tts_settings['accent']})"
-            )
-            
+            voice_name = tts_settings.get('voice_name', 'en-IN-NeerjaNeural')
+
             embed.add_field(
                 name="Imported Configuration",
                 value=f"• {timer_count} total timers\n"
-                      f"• Voice: {lang_accent_name}\n"
+                      f"• Voice: {voice_name}\n"
                       f"• Speed: {tts_settings['speed']}x\n"
+                      f"• Pitch: {tts_settings.get('pitch', 1.0)}x\n"
                       f"• Warning Time: {tts_settings.get('warning_time', 30)}s\n"
                       f"• Volume: {sanitized_config['settings']['volume']:.1f}",
                 inline=False
