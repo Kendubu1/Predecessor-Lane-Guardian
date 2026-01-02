@@ -21,7 +21,8 @@ from config import (
     TTSAccent,
     TTSSpeed,
     VALID_LANG_ACCENT_PAIRS,
-    EDGE_TTS_VOICES
+    EDGE_TTS_VOICES,
+    VOICE_PRESETS
 )
 from services import TTSService, VoiceService
 
@@ -291,12 +292,98 @@ class GameCommands(app_commands.Group):
             ephemeral=True
         )
 
+    @app_commands.command(name="voice_preset")
+    @app_commands.describe(
+        preset="Choose a voice preset (easy selection)"
+    )
+    async def voice_preset(self, interaction: discord.Interaction, preset: str):
+        """Change voice using a preset (recommended for quick setup)."""
+        if not await self.check_permissions(interaction):
+            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
+            return
+
+        # Validate preset
+        if preset not in VOICE_PRESETS:
+            await interaction.response.send_message(
+                f"Invalid preset. Use autocomplete to see available presets.",
+                ephemeral=True
+            )
+            return
+
+        preset_config = VOICE_PRESETS[preset]
+
+        # Update all TTS settings from preset
+        self.bot.config_manager.update_server_setting(
+            interaction.guild.id,
+            'settings.tts_settings.voice_name',
+            preset_config['voice_name']
+        )
+        self.bot.config_manager.update_server_setting(
+            interaction.guild.id,
+            'settings.tts_settings.speed',
+            preset_config['speed']
+        )
+        self.bot.config_manager.update_server_setting(
+            interaction.guild.id,
+            'settings.tts_settings.pitch',
+            preset_config['pitch']
+        )
+
+        # Create response embed
+        embed = discord.Embed(
+            title="Voice Preset Applied",
+            description=f"✅ {preset_config['description']}",
+            color=discord.Color.green()
+        )
+
+        embed.add_field(
+            name="Preset",
+            value=f"`{preset}`",
+            inline=True
+        )
+        embed.add_field(
+            name="Speed",
+            value=f"{preset_config['speed']}x",
+            inline=True
+        )
+        embed.add_field(
+            name="Pitch",
+            value=f"{preset_config['pitch']}x",
+            inline=True
+        )
+
+        embed.set_footer(text="Use /pred test_voice to hear it | Use /pred set_tts for fine-tuning")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @voice_preset.autocomplete('preset')
+    async def preset_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        """Autocomplete for voice presets."""
+        # Filter presets based on current input
+        filtered = [
+            (preset_id, config['description'])
+            for preset_id, config in VOICE_PRESETS.items()
+            if current.lower() in preset_id.lower() or current.lower() in config['description'].lower()
+        ]
+
+        # Sort to show Indian presets first
+        filtered.sort(key=lambda x: (
+            0 if 'indian' in x[0].lower() or 'hindi' in x[0].lower() else 1,
+            1 if 'esports' in x[0].lower() or 'hype' in x[0].lower() else 2,
+            x[0]
+        ))
+
+        return [
+            app_commands.Choice(name=description, value=preset_id)
+            for preset_id, description in filtered[:25]
+        ]
+
     @app_commands.command(name="set_voice")
     @app_commands.describe(
-        voice="Choose a voice for announcements"
+        voice="Choose a specific voice (advanced)"
     )
     async def set_voice(self, interaction: discord.Interaction, voice: str):
-        """Change the TTS voice."""
+        """Change the TTS voice (advanced - use /pred voice_preset for easier setup)."""
         if not await self.check_permissions(interaction):
             await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
             return
@@ -329,7 +416,7 @@ class GameCommands(app_commands.Group):
             inline=False
         )
 
-        embed.set_footer(text="Use /pred test_voice to hear the new voice")
+        embed.set_footer(text="Use /pred test_voice to hear the new voice | Tip: Use /pred voice_preset for easier setup")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
