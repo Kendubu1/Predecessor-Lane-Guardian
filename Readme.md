@@ -113,7 +113,8 @@ Create a container from `ghcr.io/kendubu1/predecessor-lane-guardian:latest` with
 
 `.github/workflows/main_discordbotpred.yml` still deploys `main` to the `discordbotpred` App Service. Two things App Service needs that the code cannot provide on its own:
 
-- **System packages**: FFmpeg and libopus are not in the default Python image. Set the App Service **Startup Command** to `bash startup.sh`, which installs them if missing and then starts the bot.
+- **System packages**: FFmpeg and libopus are not in the default Python image. Set the App Service **Startup Command** to `bash startup.sh`, which installs them if missing, installs the Python requirements and starts the bot. The older inline command still works too:
+  `apt-get update && apt-get install -y ffmpeg && python -m pip install --upgrade pip && pip install -r requirements.txt && python main.py`
 - **Config persistence**: `server_configs.json` is written next to the code by default and is lost on redeploy. Set the app setting `CONFIG_PATH=/home/data/server_configs.json` (`/home` is persistent storage on App Service).
 
 The bot answers on the `PORT` App Service assigns, so the container start-up ping succeeds.
