@@ -1,335 +1,313 @@
-# Standard library imports
-import os
+"""Lane Guardian - Predecessor game timer bot entry point."""
+import asyncio
 import logging
+import os
 import random
-from datetime import datetime, timedelta
-from typing import Optional, Set
+import signal
+from typing import Dict, Optional
 
-# Discord imports
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
-# Local imports
-from health_check import HealthCheck
-
-def check_voice_dependencies() -> bool:
-    """Ensure required voice dependencies are available."""
-    missing = False
-    if not discord.voice_client.has_nacl:
-        logger.error(
-            "PyNaCl library is not installed. Voice features will not work. "
-            "Install with 'pip install -r requirements.txt' or 'pip install discord.py[voice]'."
-        )
-        missing = True
-
-    if not discord.opus.is_loaded():
-        # Try a few common library names to support different platforms
-        opus_libs = [
-            os.getenv("OPUS_LIB"),  # allow override via environment variable
-            "libopus.so.0",
-            "libopus",
-            "opus",
-        ]
-        for lib in filter(None, opus_libs):
-            try:
-                discord.opus.load_opus(lib)
-                if discord.opus.is_loaded():
-                    break
-            except Exception:
-                continue
-
-        if not discord.opus.is_loaded():
-            logger.error(
-                "Opus library could not be loaded. Voice playback may fail."
-            )
-            missing = True
-
-    return not missing
-from config import ConfigManager
-from services import TTSService, VoiceService
 from commands import GameCommands
+from config import ConfigManager
+from health_check import HealthCheck
+from services import VoiceService
+from timer import GameTimer
 
+load_dotenv()
 
-# Configure logging
+# ---------------------------------------------------------------- logging
+_handlers: list = [logging.StreamHandler()]
+_log_file = os.getenv('LOG_FILE')
+if _log_file:
+    _handlers.append(logging.FileHandler(_log_file))
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper(), logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('bot.log'),
-        logging.StreamHandler()
-    ]
+    handlers=_handlers,
 )
 logger = logging.getLogger('PredTimer')
 
-class GameTimer:
-    """Handles game time tracking and event management."""
-    
-    def __init__(self):
-        self.start_time: Optional[datetime] = None
-        self.is_active: bool = False
-        self.mode: str = 'standard'
-        self.announced_events: Set[str] = set()
-        logger.info("GameTimer initialized")
 
-    def start(self, time_str: str, mode: str = 'standard') -> None:
-        """Start the timer from a specific time point."""
-        try:
-            minutes, seconds = map(int, time_str.split(':'))
-            current_time = datetime.now()
-            self.start_time = current_time - timedelta(minutes=minutes, seconds=seconds)
-            self.is_active = True
-            self.mode = mode
-            self.announced_events.clear()
-            logger.info(f"Timer started at {time_str} in {mode} mode")
-        except ValueError as e:
-            logger.error(f"Error parsing time string: {e}")
-            raise
+def check_voice_dependencies() -> bool:
+    """Ensure everything needed for voice is present. Returns True when OK."""
+    ok = True
 
-    def get_game_time(self) -> int:
-        """Get current game time in seconds."""
-        if not self.is_active or not self.start_time:
-            return 0
-        elapsed = datetime.now() - self.start_time
-        return int(elapsed.total_seconds())
+    if not discord.voice_client.has_nacl:
+        logger.error("PyNaCl is not installed. Voice will not work: pip install -r requirements.txt")
+        ok = False
 
-    def stop(self) -> None:
-        """Stop the timer and clear announced events."""
-        self.is_active = False
-        self.announced_events.clear()
-        logger.info("Timer stopped")
+    # Discord requires the DAVE end-to-end encryption protocol for every voice
+    # connection since 2026-03-02. Without the `davey` bindings the bot joins a
+    # channel and is immediately kicked (voice websocket close 4017).
+    if not getattr(discord.voice_client, 'has_dave', False):
+        logger.error(
+            "The 'davey' package is not installed, so DAVE end-to-end voice encryption "
+            "is unavailable. Discord will disconnect the bot right after it joins a "
+            "voice channel. Install it with: pip install -r requirements.txt"
+        )
+        ok = False
+
+    if not discord.opus.is_loaded():
+        for lib in filter(None, [os.getenv("OPUS_LIB"), "libopus.so.0", "libopus", "opus"]):
+            try:
+                discord.opus.load_opus(lib)
+                if discord.opus.is_loaded():
+                    logger.info(f"Loaded Opus library: {lib}")
+                    break
+            except Exception:
+                continue
+        if not discord.opus.is_loaded():
+            logger.error("Opus library could not be loaded (install libopus0 or set OPUS_LIB).")
+            ok = False
+
+    return ok
+
 
 class PredecessorBot(commands.Bot):
-    """Main bot class handling Discord integration and game timing."""
-    
+    """Discord client wiring together config, timers and voice."""
+
     def __init__(self):
         intents = discord.Intents.default()
-        intents.message_content = True
+        # Privileged: needed to enumerate members with the Administrator permission.
+        # Enable "Server Members Intent" in the Discord developer portal.
         intents.members = True
         intents.voice_states = True
-        
+
         super().__init__(
-            command_prefix='!', 
+            command_prefix=commands.when_mentioned,
             intents=intents,
             activity=discord.Game(name="/pred help"),
-            description="Predecessor Game Timer Bot"
+            description="Predecessor Game Timer Bot",
         )
-        
-        # Initialize core components
-        self.timer = GameTimer()
-        self.config_manager = ConfigManager()
-        self.tts_service = TTSService()
+
+        self.timers: Dict[int, GameTimer] = {}
+        self._announce_tasks: set = set()
+        self.config_manager = ConfigManager(os.getenv('CONFIG_PATH', 'server_configs.json'))
         self.voice_service = VoiceService(self)
-        
+        self.health_check: Optional[HealthCheck] = None
         logger.info("PredecessorBot initialized")
 
+    # ------------------------------------------------------------- timers
+    def get_timer(self, guild_id: int, create: bool = True) -> Optional[GameTimer]:
+        timer = self.timers.get(guild_id)
+        if timer is None and create:
+            timer = self.timers[guild_id] = GameTimer(guild_id)
+        return timer
+
+    # ------------------------------------------------------------- lifecycle
     async def setup_hook(self) -> None:
-            """Set up the bot's initial state and start background tasks."""
+        logger.info("Adding game commands...")
+        self.tree.add_command(GameCommands(self))
+        for command in self.tree.get_commands():
+            if isinstance(command, app_commands.Group):
+                for subcmd in command.commands:
+                    logger.info(f"  /{command.name} {subcmd.name} - {subcmd.description}")
+
+        health_port = int(os.getenv('HEALTH_PORT', '8080'))
+        self.health_check = HealthCheck(self, port=health_port)
+        try:
+            await self.health_check.start()
+        except OSError as e:
+            logger.warning(f"Health check server not started on port {health_port}: {e}")
+
+        logger.info("Syncing slash commands...")
+        try:
+            synced = await self.tree.sync()
+            logger.info(f"Synced {len(synced)} top-level command(s)")
+        except Exception as e:
+            logger.error(f"Command sync failed: {e}", exc_info=True)
+
+        self.check_timers.start()
+        self.daily_admin_sync.start()
+        logger.info("Setup complete")
+
+    async def close(self) -> None:
+        logger.info("Shutting down...")
+        self.check_timers.cancel()
+        self.daily_admin_sync.cancel()
+        for vc in list(self.voice_clients):
             try:
-                # Add game commands
-                logger.info("Adding game commands...")
-                game_commands = GameCommands(self)
-                self.tree.add_command(game_commands)
-                
-                # Log all commands in the tree
-                logger.info("Available commands in tree:")
-                for command in self.tree.get_commands():
-                    logger.info(f"/{command.name}")
-                    # If it's a group, log its subcommands
-                    if isinstance(command, app_commands.Group):
-                        for subcmd in command.commands:
-                            logger.info(f"  /{command.name} {subcmd.name} - {subcmd.description}")
-                
-                # Start health check server
-                logger.info("Starting health check server...")
-                self.health_check = HealthCheck(self, port=8081)
-                await self.health_check.start()
-        
-                # Sync command tree
-                logger.info("Syncing commands...")
-                await self.tree.sync()
-                logger.info("Command sync complete")
-                
-                # Start background tasks
-                logger.info("Starting background tasks...")
-                self.check_timers.start('standard')
-                self.daily_admin_sync.start()
+                await vc.disconnect(force=True)
+            except Exception:
+                pass
+        if self.health_check:
+            await self.health_check.stop()
+        self.voice_service.tts_service.cleanup()
+        await super().close()
 
-                logger.info("Setup complete!")
+    async def on_ready(self):
+        logger.info(f'Logged in as {self.user} (ID: {self.user.id}) in {len(self.guilds)} guild(s)')
+        for guild in self.guilds:
+            await self._sync_guild_admins(guild)
 
-            except Exception as e:
-                logger.error(f"Error in setup_hook: {e}", exc_info=True)
-                raise
+    async def on_guild_join(self, guild: discord.Guild):
+        logger.info(f"Joined new guild: {guild.name} ({guild.id})")
+        await self._sync_guild_admins(guild)
+
+    async def on_guild_remove(self, guild: discord.Guild):
+        logger.info(f"Removed from guild: {guild.name} ({guild.id})")
+        self.timers.pop(guild.id, None)
+        self.voice_service.forget_guild(guild.id)
+
+    async def on_voice_state_update(self, member: discord.Member,
+                                    before: discord.VoiceState, after: discord.VoiceState):
+        """Stop the timer if we get kicked from voice; leave when the channel empties."""
+        guild = member.guild
+
+        if member.id == self.user.id:
+            if before.channel is not None and after.channel is None:
+                logger.info(f"[{guild.id}] Voice connection ended")
+                timer = self.get_timer(guild.id, create=False)
+                if timer and timer.is_active:
+                    timer.stop()
+                self.voice_service.forget_guild(guild.id)
+            return
+
+        voice_client = guild.voice_client
+        if voice_client and before.channel == voice_client.channel:
+            humans = [m for m in voice_client.channel.members if not m.bot]
+            if not humans:
+                logger.info(f"[{guild.id}] Voice channel empty, leaving")
+                timer = self.get_timer(guild.id, create=False)
+                if timer and timer.is_active:
+                    timer.stop()
+                await self.voice_service.cleanup_voice_clients(guild)
+
+    # ------------------------------------------------------------- admins
+    async def _sync_guild_admins(self, guild: discord.Guild) -> None:
+        try:
+            new_admins = self.config_manager.sync_discord_admins(guild)
+            if new_admins:
+                logger.info(f"Synced {new_admins} Discord admin(s) for guild {guild.name} ({guild.id})")
+            await self._detect_bot_inviter(guild)
+        except Exception as e:
+            logger.error(f"Error syncing admins for guild {guild.id}: {e}")
 
     async def _detect_bot_inviter(self, guild: discord.Guild) -> None:
-        """
-        Try to detect who invited the bot by checking audit logs.
-        """
+        """Record who added the bot (from the audit log) and make them an admin."""
         try:
-            # Check if we already have an inviter recorded
             config = self.config_manager.get_server_config(guild.id)
-            existing_inviter = config.get('settings', {}).get('bot_inviter')
-            if existing_inviter is not None:
-                logger.debug(f"Bot inviter already recorded for guild {guild.id}: {existing_inviter}")
+            if config.get('settings', {}).get('bot_inviter') is not None:
                 return
 
-            # Check audit logs for bot integration creation
             async for entry in guild.audit_logs(limit=50, action=discord.AuditLogAction.bot_add):
-                if entry.target.id == self.user.id:
-                    inviter_id = entry.user.id
-                    self.config_manager.add_bot_inviter(guild.id, inviter_id)
-                    logger.info(f"Detected bot inviter from audit log: {entry.user.name} ({inviter_id}) for guild {guild.id}")
+                if entry.target and entry.target.id == self.user.id and entry.user:
+                    self.config_manager.add_bot_inviter(guild.id, entry.user.id)
+                    logger.info(f"Detected bot inviter {entry.user} ({entry.user.id}) for guild {guild.id}")
                     return
-
-            logger.warning(f"Could not detect bot inviter from audit logs for guild {guild.id}")
-
+            logger.debug(f"Could not detect bot inviter from audit logs for guild {guild.id}")
         except discord.Forbidden:
-            logger.warning(f"Missing permissions to read audit logs for guild {guild.id}")
+            logger.debug(f"Missing permission to read audit logs for guild {guild.id}")
         except Exception as e:
             logger.error(f"Error detecting bot inviter for guild {guild.id}: {e}")
 
-    async def on_ready(self):
-        """Called when the bot is ready and connected to Discord."""
-        logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
-        # Add an additional sync attempt here for redundancy
-        try:
-            await self.tree.sync()
-            logger.info("Commands synced in on_ready")
-        except Exception as e:
-            logger.error(f"Error syncing commands in on_ready: {e}")
-        logger.info('------')
-
-        # Sync Discord admins for all guilds on startup
-        for guild in self.guilds:
-            try:
-                # Auto-sync all Discord administrators
-                new_admins = self.config_manager.sync_discord_admins(guild)
-                if new_admins > 0:
-                    logger.info(f"Synced {new_admins} Discord admin(s) for guild {guild.name} ({guild.id})")
-
-                # Try to detect bot inviter from audit logs
-                await self._detect_bot_inviter(guild)
-
-            except Exception as e:
-                logger.error(f"Error syncing admins for guild {guild.id}: {e}")
-
-    async def on_guild_join(self, guild: discord.Guild):
-        """Automatically sync admins when bot joins a guild."""
-        try:
-            logger.info(f"Joined new guild: {guild.name} ({guild.id})")
-
-            # Sync all Discord administrators
-            new_admins = self.config_manager.sync_discord_admins(guild)
-            logger.info(f"Auto-synced {new_admins} Discord admin(s) for new guild {guild.name}")
-
-            # Try to detect who invited the bot
-            await self._detect_bot_inviter(guild)
-
-        except Exception as e:
-            logger.error(f"Error setting up admins for new guild {guild.id}: {e}")
-        
-    # In main.py, update the check_timers method
+    # ------------------------------------------------------------- loops
     @tasks.loop(seconds=1.0)
-    async def check_timers(self, mode: str = 'standard'):
-        """Check and announce timer events for the given mode."""
-        if not self.timer.is_active:
-            return
+    async def check_timers(self):
+        """Fire due announcements for every guild with a running timer."""
+        for voice_client in list(self.voice_clients):
+            guild_id = voice_client.guild.id
+            timer = self.timers.get(guild_id)
+            if not timer or not timer.is_active or not voice_client.is_connected():
+                continue
 
-        try:
-            current_time = self.timer.get_game_time()
-            
-            for voice_client in self.voice_clients:
-                server_config = self.config_manager.get_server_config(voice_client.guild.id)
-                active_mode = self.timer.mode if hasattr(self.timer, 'mode') else mode
-                timers = self.config_manager.get_server_timers(voice_client.guild.id, mode=active_mode)
+            try:
+                current_time = timer.get_game_time()
+                server_config = self.config_manager.get_server_config(guild_id)
                 settings = server_config.get('settings', {})
-                
-                warning_time = settings.get('tts_settings', {}).get('warning_time', 30)
-                
-                for event_name, timer_config in timers.items():
-                    event_id = f"{voice_client.guild.id}_{event_name}"
-                    
-                    # Skip if event already announced or too late
-                    if (event_id in self.timer.announced_events or 
-                        current_time > timer_config['time'] + warning_time):
+                warning_time = int(settings.get('tts_settings', {}).get('warning_time', 0) or 0)
+                events = self.config_manager.get_server_timers(guild_id, mode=timer.mode)
+
+                # Fire in chronological order so simultaneous events queue sensibly.
+                for event_name, event in sorted(events.items(), key=lambda kv: kv[1].get('time', 0)):
+                    event_time = int(event.get('time', 0))
+                    if event_name in timer.announced_events:
                         continue
-                    
-                    # Check if it's time to announce
-                    if current_time >= timer_config['time'] - warning_time:
-                        # Get messages list and select one randomly
-                        messages = timer_config.get('messages', [])
-                        if not messages:  # If messages list is empty, try legacy 'message' field
-                            messages = [timer_config.get('message', 'Timer event')]
-                        
+                    if current_time > event_time + warning_time + 5:
+                        # Missed it (e.g. timer started late); don't spam old events.
+                        timer.announced_events.add(event_name)
+                        continue
+                    if current_time >= event_time - warning_time:
+                        messages = event.get('messages') or [event.get('message', 'Timer event')]
                         message = random.choice(messages)
-                        
-                        await self.voice_service.play_announcement(
-                            voice_client,
-                            message,
-                            settings
+                        timer.announced_events.add(event_name)
+                        task = asyncio.create_task(
+                            self._announce(voice_client, message, settings, event_name)
                         )
-                        self.timer.announced_events.add(event_id)
-                        
+                        self._announce_tasks.add(task)
+                        task.add_done_callback(self._announce_tasks.discard)
+            except Exception as e:
+                logger.error(f"[{guild_id}] Error in check_timers: {e}", exc_info=True)
+
+    async def _announce(self, voice_client: discord.VoiceClient, message: str,
+                        settings: dict, event_name: str) -> None:
+        try:
+            await self.voice_service.play_announcement(voice_client, message, settings)
         except Exception as e:
-            logger.error(f"Error in check_timers: {e}", exc_info=True)
+            logger.error(f"[{voice_client.guild.id}] Failed to announce {event_name}: {e}")
+
+    @check_timers.before_loop
+    async def before_check_timers(self):
+        await self.wait_until_ready()
 
     @tasks.loop(hours=24.0)
     async def daily_admin_sync(self):
-        """Daily task to sync Discord administrators across all guilds."""
-        try:
-            logger.info("Starting daily admin sync for all guilds...")
-            total_synced = 0
-
-            for guild in self.guilds:
-                try:
-                    new_admins = self.config_manager.sync_discord_admins(guild)
-                    total_synced += new_admins
-
-                    if new_admins > 0:
-                        logger.info(f"Daily sync: Added {new_admins} new admin(s) to guild {guild.name} ({guild.id})")
-
-                    # Also try to detect inviter if not already recorded
-                    await self._detect_bot_inviter(guild)
-
-                except Exception as e:
-                    logger.error(f"Error in daily sync for guild {guild.id}: {e}")
-
-            if total_synced > 0:
-                logger.info(f"Daily admin sync complete: {total_synced} total new admin(s) across all guilds")
-            else:
-                logger.info("Daily admin sync complete: No new admins detected")
-
-        except Exception as e:
-            logger.error(f"Error in daily_admin_sync task: {e}", exc_info=True)
+        logger.info("Starting daily admin sync for all guilds...")
+        for guild in self.guilds:
+            await self._sync_guild_admins(guild)
 
     @daily_admin_sync.before_loop
     async def before_daily_admin_sync(self):
-        """Wait until the bot is ready before starting the daily admin sync."""
         await self.wait_until_ready()
-        logger.info("Daily admin sync task initialized")
 
-def run_bot():
-    """Start the bot."""
-    # Load environment variables
-    load_dotenv()
 
+async def _run(token: str) -> None:
+    bot = PredecessorBot()
+    loop = asyncio.get_running_loop()
+
+    def _request_shutdown(*_):
+        logger.info("Termination signal received")
+        loop.create_task(bot.close())
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_shutdown)
+        except (NotImplementedError, RuntimeError):
+            pass  # Windows
+
+    async with bot:
+        await bot.start(token)
+
+
+def run_bot() -> None:
+    """Validate the environment and start the bot."""
     if not check_voice_dependencies():
         logger.critical("Missing required voice dependencies. Exiting.")
-        return
-    
-    # Get Discord token
+        raise SystemExit(1)
+
     token = os.getenv('DISCORD_TOKEN')
     if not token:
-        logger.error("No Discord token found in environment variables!")
-        return
-        
+        logger.critical("DISCORD_TOKEN is not set (put it in .env or the container environment).")
+        raise SystemExit(1)
+
     try:
-        # Create and run bot
-        bot = PredecessorBot()
-        bot.run(token, log_handler=None)
-    except Exception as e:
-        logger.critical(f"Failed to start bot: {e}")
+        asyncio.run(_run(token))
+    except discord.LoginFailure:
+        logger.critical("Discord rejected the token. Check DISCORD_TOKEN.")
+        raise SystemExit(1)
+    except discord.PrivilegedIntentsRequired:
+        logger.critical(
+            "Enable 'Server Members Intent' for this bot at "
+            "https://discord.com/developers/applications -> Bot -> Privileged Gateway Intents."
+        )
+        raise SystemExit(1)
+    except KeyboardInterrupt:
+        pass
+
 
 if __name__ == "__main__":
     run_bot()

@@ -116,3 +116,8 @@ Thumbs.db
 # Bot-specific
 bot.log
 server_configs.json.bak
+
+# Self-hosting
+data/*
+!data/.gitkeep
+*.tmp

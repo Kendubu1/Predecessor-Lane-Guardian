@@ -1,143 +1,144 @@
 # Lane Guardian - Predecessor Game Timer Bot 🎮
 
-Lane Guardian is a Discord bot designed to help Predecessor players track important game events, objectives, and timings through voice announcements. It provides customizable timers, multi-language support, and server-specific configurations.
+Lane Guardian is a Discord bot that calls out Predecessor objectives and timings over voice: jungle spawns, Fangtooth, Orb Prime, tower plating, ward reminders and more. Each server gets its own timers, voice and settings.
 
 ## Features ⚡
 
-- Voice Announcements: Automated TTS announcements for game events
-- Customizable Timers: Add, remove, and manage game event timers
-- Multi-language Support: Multiple languages and accents available for TTS
-- Server-specific Settings: Each Discord server can have its own configuration
-- Category-based Events: Organize timers by categories
-- Admin Controls: Role-based permissions for bot configuration
-- Import/Export: Share configurations between servers
+- **Voice callouts**: natural Microsoft neural voices (Edge-TTS). Default is Neerja, an expressive Indian English voice at a quick pace.
+- **Per-server timers**: add, edit and remove callouts, each with several randomised lines.
+- **Voice presets**: pick a voice from a dropdown, with an instant preview in your channel.
+- **Admin controls**: server admins, chosen users and roles can change settings.
+- **Import/Export**: share timer packs between servers as JSON.
+- **Self-hosted**: runs anywhere Docker runs, including a NAS.
 
-## Quick Start Guide (How Not to Throw Your Games) 🚀
+## Quick Start (How Not to Throw Your Games) 🚀
 
-To make the most of your Lane Guardian do the following...
-0. https://discord.com/oauth2/authorize?client_id=1339385702151884800&permissions=293171527744&scope=bot%20applications.commands
-
-1. **Before You Int (Pre-Match Setup)**
-   - Jump into a voice channel
-   - `/pred settings` - Make sure your bot isn't speaking in cursed tongues
-   - `/pred say` - Check if the volume is perfect for your precious ears or just mess with your friends
-   - `/pred set_tts` - Configure the TTS voice language & accent.
-   - `/pred test_voice` - Play a quick voice line to verify volume
-   - `/pred list_timers ` - Review all the existing timers in place by default
-   - `/pred export_config` & `/pred import_config` - Make any edits of the TTS voice lines in place!
-
-2. **Time to Clap Some Cheeks (Game Start)**
-   - When minions spawn (0:00), hit that `/pred start 0:00` like you mean it
-   - Examples of what your bot will remind you about:
-     - 2:00 - Ward time
-     - 2:30 - Gold buff incoming 
-     - 3:00 - River buffs are up 
-     - 5:00 - Fangtooth joins the party 
-
-3. **During Your Path to Victory (or Throwing)**
-   - Bot's got your back with timely reminders
-   - Disconnected? No problem! Use `/pred start` with current game time
-   - Want some peace? `/pred stop` to shut it up
-
-Remember: Lane Guardian is like your aggressive but loving coach to keep your 5 stack from getting distracted.
-
-## Prerequisites 📋
-
-- Python 3.8 or higher
-- Discord Bot Token
-- FFmpeg (for voice functionality)
-- Opus system library (e.g., `libopus0` on Debian/Ubuntu)
-- Required Python packages (see requirements.txt)
-
-## Installation 💻
-
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/lane-guardian.git
-cd lane-guardian
-```
-
-2. Create a virtual environment and activate it:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows, use: venv\Scripts\activate
-```
-
-3. Install the required packages:
-```bash
-pip install -r requirements.txt
-```
-This will install `discord.py` with voice support. Ensure `PyNaCl` is present or voice connections will fail.
-
-4. Create a `.env` file in the project root and add your Discord bot token:
-```
-DISCORD_TOKEN=your_discord_bot_token_here
-```
-
-5. Ensure FFmpeg is installed on your system and accessible in the PATH
-6. Install the Opus library for voice playback (e.g., `sudo apt-get install libopus0` on Debian/Ubuntu)
+1. Invite the bot with the `bot` and `applications.commands` scopes (see [Create the Discord application](#create-the-discord-application)).
+2. **Before the match**
+   - Jump into a voice channel.
+   - `/pred voice_preset` to pick a voice. It plays a sample right away.
+   - `/pred set_tts` to tweak speed and pitch, `/pred set_volume` for loudness.
+   - `/pred list_timers` to see the default callouts.
+3. **Game start**
+   - When minions spawn, run `/pred start`. Joined late? `/pred start time:4:30`.
+   - `/pred status` shows the game clock and the next callouts.
+4. **Game over**
+   - `/pred stop`. The bot also leaves on its own when the channel empties.
 
 ## Commands 🎮
 
-### Basic Commands
-- `/pred start <time>` - Start the game timer (format: M:SS)
-- `/pred stop` - Stop the current game timer
-- `/pred list_timers` - View all configured timers
-- `/pred settings` - View current server settings
+| Command | What it does |
+| --- | --- |
+| `/pred start [time] [mode]` | Start the timer at `M:SS` (default `0:00`), standard or nitro |
+| `/pred stop` | Stop the timer and leave voice |
+| `/pred status` | Game time, mode and upcoming callouts |
+| `/pred say <message>` | Speak any message |
+| `/pred test_voice [message]` | Hear the current voice |
+| `/pred voice_preset <preset>` | Pick a voice from the list (Indian, Hindi, regional, US, UK, AU) |
+| `/pred set_voice <voice>` | Choose any supported voice by name |
+| `/pred set_tts [speed] [pitch] [warning_time]` | Speed and pitch dropdowns, seconds of early warning |
+| `/pred set_volume <0-200>` | Volume in percent |
+| `/pred settings` | Show the server's settings |
+| `/pred help` | In-Discord cheat sheet |
+| `/pred list_timers [category]` | List callouts |
+| `/pred add_timer <name> <time> <message> [category]` | Add a callout or another line to one |
+| `/pred edit_timer <name> <time> [message] [category]` | Change a callout |
+| `/pred remove_timer <name>` | Delete a callout |
+| `/pred remove_timer_message <name> <index>` | Delete one line from a callout |
+| `/pred export_config` / `/pred import_config` | Back up or share the server config |
+| `/pred add_admin` / `remove_admin` / `add_admin_role` / `remove_admin_role` / `sync_admins` | Manage who can change settings |
 
-### Timer Management
-- `/pred add_timer <name> <time> <message> [category]` - Add a new timer
-- `/pred remove_timer <name>` - Remove an existing timer
-- `/pred edit_timer <name> <time> [message] [category]` - Edit a timer
-- `/pred import_config <config_code>` - Import a timer configuration
-- `/pred export_config` - Export current configuration
+Server owners and anyone with Discord's Administrator permission can always manage the bot. Discord administrators are synced into the admin list on startup and daily.
 
-### Settings Management
-- `/pred set_tts` - Configure TTS settings (language, accent, speed)
-- `/pred set_volume <volume>` - Set announcement volume (0.0 - 1.0)
-- `/pred test_voice [message]` - Test current voice settings
+## Self-hosting with Docker (NAS friendly) 🐳
 
-### Admin Commands
-- `/pred add_admin <user>` - Add a bot admin
-- `/pred remove_admin <user>` - Remove a bot admin
-- `/pred add_admin_role <role>` - Add an admin role
+The bot needs only outbound internet access. No ports have to be opened on your router.
 
-When the bot joins a server or restarts, the guild owner is automatically added
-to the `admin_users` list so they can manage the bot immediately. Any users
-listed under `secondary_owners` in the server configuration are also added
-automatically.
+### Create the Discord application
 
-Admins are recognized either by one of the configured roles or by being
-explicitly listed in the server settings as `admin_users`.
+1. Go to https://discord.com/developers/applications and create an application, then add a **Bot**.
+2. Under **Bot → Privileged Gateway Intents** enable **Server Members Intent**. (Used to find server admins; the bot exits with a clear error if it is missing.)
+3. Copy the bot **token**. You will put it in `.env`.
+4. Invite the bot with **OAuth2 → URL Generator**: scopes `bot` and `applications.commands`; permissions `Connect`, `Speak`, `View Channels`, `Send Messages`, `Embed Links`, `Attach Files`, `View Audit Log` (optional, used to detect who invited the bot).
 
-## Timer Categories ⏰
+### Run with docker compose
 
-- Early Game (0:00 - 5:00)
-- Mid Game (5:00 - 20:00)
-- Late Game (20:00+)
-- Objectives
-- Buffs
-- Farm
-- Reminders
+```bash
+git clone https://github.com/Kendubu1/Predecessor-Lane-Guardian.git
+cd Predecessor-Lane-Guardian
+cp .env.example .env        # put your DISCORD_TOKEN in here
+docker compose up -d
+docker compose logs -f      # look for "Logged in as ..."
+```
+
+Settings live in `./data/server_configs.json` (mounted at `/data` in the container), so they survive upgrades. To upgrade:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+### Use the prebuilt image instead of building
+
+Every push to `main` publishes a multi-arch image (x86-64 and ARM64) to GitHub Container Registry. In `docker-compose.yml` replace the `build: .` line with:
+
+```yaml
+    image: ghcr.io/kendubu1/predecessor-lane-guardian:latest
+```
+
+Then `docker compose pull && docker compose up -d`.
+
+### Synology, Unraid, QNAP, Portainer
+
+Create a container from `ghcr.io/kendubu1/predecessor-lane-guardian:latest` with:
+
+- Environment variable `DISCORD_TOKEN` set to your token.
+- A volume mapping a folder on the NAS to `/data`.
+- Restart policy "unless stopped".
+- Optionally publish container port `8080` for the `/health` endpoint (JSON, returns 503 until the bot is connected). Handy for Uptime Kuma.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DISCORD_TOKEN` | required | Bot token |
+| `CONFIG_PATH` | `/data/server_configs.json` in Docker, `server_configs.json` otherwise | Where server settings are stored |
+| `HEALTH_PORT` | `8080` | Port for `/health` |
+| `LOG_FILE` | unset | Also write logs to this file (stdout is always used) |
+| `LOG_LEVEL` | `INFO` | Log verbosity |
+| `VOICE_INACTIVITY_TIMEOUT` | `300` | Seconds of silence before leaving voice when no timer runs |
+| `OPUS_LIB` | auto | Opus library name/path if auto-detection fails |
+
+## Running without Docker 💻
+
+Requirements: Python 3.11+ (3.12 recommended), FFmpeg and libopus on the PATH (`sudo apt install ffmpeg libopus0` on Debian/Ubuntu).
+
+```bash
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env    # add DISCORD_TOKEN
+python main.py
+```
+
+`python -m discord --version` should list PyNaCl and `davey`. If `davey` is missing, voice will not work (see below).
+
+## Why the bot used to join and leave immediately
+
+Discord made its DAVE end-to-end encryption protocol mandatory for every voice connection on 2 March 2026. Bots that do not speak DAVE are disconnected right after joining a channel (voice close code 4017), which is exactly the "joins the lobby then drops" behaviour. Lane Guardian now runs on discord.py 2.7+ with the `davey` bindings, which implement DAVE, and refuses to start if they are missing.
 
 ## Configuration ⚙️
 
-The bot stores configurations in `server_configs.json`. Each server can have its own:
-- Timer events
-- TTS settings
-- Volume settings
-- Admin roles
-- Secondary owners
-- Custom pronunciations
+`server_configs.json` holds one entry per server: timers, TTS settings (voice, speed, pitch, warning time, custom pronunciations), volume, admin users and roles, and secondary owners. Use `/pred export_config` and `/pred import_config` rather than editing it by hand while the bot is running.
 
-## Contributing
+## Development
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
+```bash
+pip install -r requirements.txt pytest
+pytest
+```
+
+CI runs the tests on every push and pull request and publishes the container image from `main`.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT

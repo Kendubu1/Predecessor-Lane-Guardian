@@ -1,0 +1,29 @@
+# Self-hosted Lane Guardian.
+#   1. cp .env.example .env  and set DISCORD_TOKEN
+#   2. docker compose up -d
+#   3. docker compose logs -f
+#
+# To use the prebuilt image from GitHub instead of building locally, replace the
+# `build:` line with:
+#   image: ghcr.io/kendubu1/predecessor-lane-guardian:latest
+services:
+  lane-guardian:
+    build: .
+    image: lane-guardian:local
+    container_name: lane-guardian
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: ${TZ:-America/Chicago}
+    volumes:
+      # Per-server settings and timers. Change the left side to a folder on your NAS.
+      - ./data:/data
+    ports:
+      # Optional: expose the /health endpoint on the NAS for Uptime Kuma, etc.
+      - "8080:8080"
+    # The bot only needs outbound access to Discord and Microsoft TTS; no inbound ports required.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

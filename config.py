@@ -2,6 +2,7 @@ from enum import Enum
 import json
 import copy
 import logging
+import os
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger('PredTimer.Config')
@@ -67,115 +68,179 @@ class TTSSpeed(Enum):
     FAST = 1.25
     VERY_FAST = 1.5
 
-# Edge-TTS Voice Options
-EDGE_TTS_VOICES = {
-    # Indian Voices (English)
-    'en-IN-NeerjaNeural': 'Indian Female (Neerja) - Clear, Professional',
-    'en-IN-PrabhatNeural': 'Indian Male (Prabhat) - Deep, Authoritative',
+# --------------------------------------------------------------------- voices
+# Voice IDs must exist on the Edge-TTS endpoint (`edge-tts --list-voices`).
+DEFAULT_VOICE = 'en-IN-NeerjaExpressiveNeural'
+DEFAULT_SPEED = 1.15   # +15%: quick enough for callouts, still clear
+DEFAULT_PITCH = 1.0
 
-    # Hindi Voices
+EDGE_TTS_VOICES = {
+    # Indian English
+    'en-IN-NeerjaExpressiveNeural': 'Indian Female (Neerja Expressive) - Natural, animated',
+    'en-IN-NeerjaNeural': 'Indian Female (Neerja) - Calm, professional',
+    'en-IN-PrabhatNeural': 'Indian Male (Prabhat) - Deep, authoritative',
+
+    # Hindi and regional Indian languages (they also read English text, with a local accent)
     'hi-IN-SwaraNeural': 'Hindi Female (Swara) - Natural',
     'hi-IN-MadhurNeural': 'Hindi Male (Madhur) - Clear',
+    'ta-IN-PallaviNeural': 'Tamil Female (Pallavi)',
+    'ta-IN-ValluvarNeural': 'Tamil Male (Valluvar)',
+    'te-IN-ShrutiNeural': 'Telugu Female (Shruti)',
+    'te-IN-MohanNeural': 'Telugu Male (Mohan)',
+    'mr-IN-AarohiNeural': 'Marathi Female (Aarohi)',
+    'bn-IN-TanishaaNeural': 'Bengali Female (Tanishaa)',
+    'gu-IN-DhwaniNeural': 'Gujarati Female (Dhwani)',
+    'kn-IN-SapnaNeural': 'Kannada Female (Sapna)',
+    'ml-IN-SobhanaNeural': 'Malayalam Female (Sobhana)',
+    'ur-IN-GulNeural': 'Urdu Female (Gul)',
 
-    # American English (Popular for esports)
-    'en-US-AriaNeural': 'American Female (Aria) - Friendly, Clear',
-    'en-US-GuyNeural': 'American Male (Guy) - Deep, Caster-like',
+    # American English
+    'en-US-AriaNeural': 'American Female (Aria) - Friendly, clear',
+    'en-US-GuyNeural': 'American Male (Guy) - Deep, caster-like',
     'en-US-JennyNeural': 'American Female (Jenny) - Professional',
-    'en-US-DavisNeural': 'American Male (Davis) - Energetic, Young',
+    'en-US-DavisNeural': 'American Male (Davis) - Energetic, young',
 
     # British English
     'en-GB-SoniaNeural': 'British Female (Sonia) - Professional',
-    'en-GB-RyanNeural': 'British Male (Ryan) - Clear, Energetic',
+    'en-GB-RyanNeural': 'British Male (Ryan) - Clear, energetic',
 
     # Australian English
     'en-AU-NatashaNeural': 'Australian Female (Natasha) - Friendly',
     'en-AU-WilliamNeural': 'Australian Male (William) - Relaxed',
 }
 
-# Voice Presets for Easy Selection
+# Presets shown as a dropdown in /pred voice_preset. Keep this at 25 or fewer.
+DEFAULT_PRESET = 'indian-female'
 VOICE_PRESETS = {
-    # Indian Presets (Default)
     'indian-female': {
+        'voice_name': 'en-IN-NeerjaExpressiveNeural',
+        'description': '🇮🇳 Indian Female · Neerja, expressive & quick (default)',
+        'speed': 1.15, 'pitch': 1.0,
+    },
+    'indian-female-calm': {
         'voice_name': 'en-IN-NeerjaNeural',
-        'description': '🇮🇳 Indian Female - Clear, Professional (Neerja)',
-        'speed': 1.0,
-        'pitch': 1.0
+        'description': '🇮🇳 Indian Female · Neerja, calm & clear',
+        'speed': 1.0, 'pitch': 1.0,
+    },
+    'indian-female-rapid': {
+        'voice_name': 'en-IN-NeerjaExpressiveNeural',
+        'description': '🇮🇳 Indian Female · Neerja, rapid callouts',
+        'speed': 1.3, 'pitch': 1.0,
     },
     'indian-male': {
         'voice_name': 'en-IN-PrabhatNeural',
-        'description': '🇮🇳 Indian Male - Deep, Authoritative (Prabhat)',
-        'speed': 1.0,
-        'pitch': 1.0
+        'description': '🇮🇳 Indian Male · Prabhat, deep & quick',
+        'speed': 1.1, 'pitch': 1.0,
     },
-
-    # Hindi Presets
     'hindi-female': {
         'voice_name': 'hi-IN-SwaraNeural',
-        'description': '🇮🇳 Hindi Female - Natural (Swara)',
-        'speed': 1.0,
-        'pitch': 1.0
+        'description': '🇮🇳 Hindi Female · Swara',
+        'speed': 1.1, 'pitch': 1.0,
     },
     'hindi-male': {
         'voice_name': 'hi-IN-MadhurNeural',
-        'description': '🇮🇳 Hindi Male - Clear (Madhur)',
-        'speed': 1.0,
-        'pitch': 1.0
+        'description': '🇮🇳 Hindi Male · Madhur',
+        'speed': 1.1, 'pitch': 1.0,
     },
-
-    # American Esports Presets
+    'tamil-female': {
+        'voice_name': 'ta-IN-PallaviNeural',
+        'description': '🇮🇳 Tamil Female · Pallavi',
+        'speed': 1.1, 'pitch': 1.0,
+    },
+    'telugu-female': {
+        'voice_name': 'te-IN-ShrutiNeural',
+        'description': '🇮🇳 Telugu Female · Shruti',
+        'speed': 1.1, 'pitch': 1.0,
+    },
+    'marathi-female': {
+        'voice_name': 'mr-IN-AarohiNeural',
+        'description': '🇮🇳 Marathi Female · Aarohi',
+        'speed': 1.1, 'pitch': 1.0,
+    },
+    'bengali-female': {
+        'voice_name': 'bn-IN-TanishaaNeural',
+        'description': '🇮🇳 Bengali Female · Tanishaa',
+        'speed': 1.1, 'pitch': 1.0,
+    },
     'esports-caster': {
         'voice_name': 'en-US-GuyNeural',
-        'description': '🎮 Esports Caster - Deep, Professional (Guy)',
-        'speed': 1.1,
-        'pitch': 0.95
+        'description': '🎮 Esports Caster · Guy, deep American',
+        'speed': 1.1, 'pitch': 0.95,
     },
     'hype-voice': {
         'voice_name': 'en-US-DavisNeural',
-        'description': '🔥 Hype Voice - Energetic, Young (Davis)',
-        'speed': 1.15,
-        'pitch': 1.05
+        'description': '🔥 Hype Voice · Davis, energetic American',
+        'speed': 1.15, 'pitch': 1.05,
     },
     'american-female': {
         'voice_name': 'en-US-AriaNeural',
-        'description': '🇺🇸 American Female - Friendly, Clear (Aria)',
-        'speed': 1.0,
-        'pitch': 1.0
+        'description': '🇺🇸 American Female · Aria',
+        'speed': 1.0, 'pitch': 1.0,
     },
     'professional-female': {
         'voice_name': 'en-US-JennyNeural',
-        'description': '🎙️ Professional Female - Broadcast Quality (Jenny)',
-        'speed': 1.0,
-        'pitch': 1.0
+        'description': '🎙️ Broadcast Female · Jenny',
+        'speed': 1.0, 'pitch': 1.0,
     },
-
-    # British Presets
     'british-male': {
         'voice_name': 'en-GB-RyanNeural',
-        'description': '🇬🇧 British Male - Clear, Energetic (Ryan)',
-        'speed': 1.0,
-        'pitch': 1.0
+        'description': '🇬🇧 British Male · Ryan',
+        'speed': 1.0, 'pitch': 1.0,
     },
     'british-female': {
         'voice_name': 'en-GB-SoniaNeural',
-        'description': '🇬🇧 British Female - Professional (Sonia)',
-        'speed': 1.0,
-        'pitch': 1.0
+        'description': '🇬🇧 British Female · Sonia',
+        'speed': 1.0, 'pitch': 1.0,
     },
-
-    # Australian Presets
     'australian-male': {
         'voice_name': 'en-AU-WilliamNeural',
-        'description': '🇦🇺 Australian Male - Relaxed (William)',
-        'speed': 1.0,
-        'pitch': 1.0
+        'description': '🇦🇺 Australian Male · William',
+        'speed': 1.0, 'pitch': 1.0,
     },
     'australian-female': {
         'voice_name': 'en-AU-NatashaNeural',
-        'description': '🇦🇺 Australian Female - Friendly (Natasha)',
-        'speed': 1.0,
-        'pitch': 1.0
+        'description': '🇦🇺 Australian Female · Natasha',
+        'speed': 1.0, 'pitch': 1.0,
     },
 }
+
+# Friendly names for the speed / pitch dropdowns in /pred set_tts.
+SPEED_CHOICES = [
+    (0.9, 'Relaxed (0.9x)'),
+    (1.0, 'Normal (1.0x)'),
+    (1.15, 'Quick (1.15x) - default'),
+    (1.3, 'Rapid (1.3x)'),
+    (1.5, 'Very fast (1.5x)'),
+]
+PITCH_CHOICES = [
+    (0.9, 'Lower'),
+    (1.0, 'Normal - default'),
+    (1.1, 'Higher'),
+]
+
+
+def describe_speed(speed: float) -> str:
+    for value, label in SPEED_CHOICES:
+        if abs(value - speed) < 0.01:
+            return label.replace(' - default', '')
+    return f"Custom ({speed}x)"
+
+
+def describe_pitch(pitch: float) -> str:
+    for value, label in PITCH_CHOICES:
+        if abs(value - pitch) < 0.01:
+            return label.replace(' - default', '')
+    return f"Custom ({pitch}x)"
+
+
+def find_preset(tts_settings: Dict[str, Any]) -> Optional[str]:
+    """Return the preset name matching the given voice/speed/pitch, if any."""
+    for name, preset in VOICE_PRESETS.items():
+        if (preset['voice_name'] == tts_settings.get('voice_name')
+                and abs(preset['speed'] - float(tts_settings.get('speed', 1.0))) < 0.01
+                and abs(preset['pitch'] - float(tts_settings.get('pitch', 1.0))) < 0.01):
+            return name
+    return None
 
 # Language-Accent valid combinations (kept for backwards compatibility)
 VALID_LANG_ACCENT_PAIRS = {
@@ -215,12 +280,12 @@ DEFAULT_CONFIG = {
         'secondary_owners': [],
         'bot_inviter': None,  # Track who invited the bot
         'tts_settings': {
-            'voice_name': 'en-IN-NeerjaNeural',  # Indian female voice (Edge-TTS)
+            'voice_name': DEFAULT_VOICE,
             'language': TTSLanguage.ENGLISH.value,
             'accent': TTSAccent.INDIAN.value,
             'warning_time': 0,
-            'speed': 1.0,
-            'pitch': 1.0,
+            'speed': DEFAULT_SPEED,
+            'pitch': DEFAULT_PITCH,
             'word_gap': 0.1,
             'emphasis_volume': 1.2,
             'use_phonetics': False,
@@ -507,29 +572,25 @@ DEFAULT_CONFIG = {
 class ConfigManager:
     """Handles server-specific configurations and settings."""
     
-    def __init__(self, config_file: str = 'server_configs.json'):
-        self.config_file = config_file
+    def __init__(self, config_file: Optional[str] = None):
+        self.config_file = config_file or os.getenv('CONFIG_PATH', 'server_configs.json')
+        parent = os.path.dirname(os.path.abspath(self.config_file))
+        os.makedirs(parent, exist_ok=True)
         self.configs = self._load_configs()
-        logger.info("ConfigManager initialized")
-
-    def _load_configs(self) -> Dict[str, Any]:
-        """Load configurations from file."""
-        try:
-            with open(self.config_file, 'r') as f:
-                configs = json.load(f)
-                logger.info(f"Loaded configurations for {len(configs)} servers")
-                return configs
-        except FileNotFoundError:
-            logger.info("No existing config file found, creating new configuration")
-            return {}
-        except json.JSONDecodeError:
-            logger.error("Error decoding config file, creating new configuration")
-            return {}
+        logger.info(f"ConfigManager initialized ({self.config_file})")
 
     def save_configs(self) -> None:
-        """Save current configurations to file."""
-        with open(self.config_file, 'w') as f:
-            json.dump(self.configs, f, indent=4)
+        """Save current configurations to file atomically."""
+        self._write_json(self.configs)
+
+    def _write_json(self, data: Dict[str, Any]) -> None:
+        """Write to a temp file then rename so a crash never leaves a half-written config."""
+        tmp_path = f"{self.config_file}.tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, self.config_file)
 
     def get_server_config(self, server_id: int) -> Dict[str, Any]:
         """Get configuration for a specific server."""
@@ -567,12 +628,12 @@ class ConfigManager:
             
             # Add new TTS settings if they don't exist
             default_tts = {
-                'voice_name': 'en-IN-NeerjaNeural',  # Indian female voice
+                'voice_name': DEFAULT_VOICE,
                 'language': 'en',
                 'accent': 'co.in',
-                'warning_time': 30,
-                'speed': 1.0,
-                'pitch': 1.0,
+                'warning_time': 0,
+                'speed': DEFAULT_SPEED,
+                'pitch': DEFAULT_PITCH,
                 'word_gap': 0.1,
                 'emphasis_volume': 1.2,
                 'use_phonetics': False,
@@ -614,7 +675,7 @@ class ConfigManager:
     def _load_configs(self) -> Dict[str, Any]:
         """Load configurations from file with migration."""
         try:
-            with open(self.config_file, 'r') as f:
+            with open(self.config_file, 'r', encoding='utf-8') as f:
                 configs = json.load(f)
                 migrated_configs = {}
                 
@@ -626,8 +687,7 @@ class ConfigManager:
                 # If any configs were migrated, save the changes
                 if configs != migrated_configs:
                     logger.info("Saving migrated configurations")
-                    with open(self.config_file, 'w') as f:
-                        json.dump(migrated_configs, f, indent=4)
+                    self._write_json(migrated_configs)
                 
                 logger.info(f"Loaded configurations for {len(configs)} servers")
                 return migrated_configs

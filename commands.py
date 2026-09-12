@@ -1,111 +1,118 @@
-# Standard library imports
-import os
-import json
+"""Slash commands for Lane Guardian, all under /pred."""
 import asyncio
+import io
+import json
 import logging
-import tempfile
-import base64
-from datetime import datetime, timedelta
-from typing import Optional, List, Set
+from typing import List, Optional
 
-# Discord imports
 import discord
 from discord import app_commands
 
-# Local imports
-from health_check import HealthCheck
 from config import (
-    ConfigManager,
-    TimerCategory,
-    TTSLanguage,
-    TTSAccent,
-    TTSSpeed,
-    VALID_LANG_ACCENT_PAIRS,
+    DEFAULT_PITCH,
+    DEFAULT_SPEED,
+    DEFAULT_VOICE,
     EDGE_TTS_VOICES,
-    VOICE_PRESETS
+    PITCH_CHOICES,
+    SPEED_CHOICES,
+    TimerCategory,
+    VALID_LANG_ACCENT_PAIRS,
+    VOICE_PRESETS,
+    describe_pitch,
+    describe_speed,
+    find_preset,
 )
-from services import TTSService, VoiceService
-
+from timer import GameTimer
 
 logger = logging.getLogger('PredTimer.Commands')
 
+PREVIEW_TEXT = "Voice updated. Fangtooth is now online, get ready."
+CATEGORY_CHOICES = [
+    app_commands.Choice(name=cat.name.replace('_', ' ').title(), value=cat.value)
+    for cat in TimerCategory
+]
+
+
+@app_commands.guild_only()
 class GameCommands(app_commands.Group):
-    """Handles all game-related commands for the bot."""
-    
+    """All /pred subcommands."""
+
     def __init__(self, bot):
-        super().__init__(name="pred", description="pred game timer commands")
+        super().__init__(name="pred", description="Predecessor game timer commands")
         self.bot = bot
-        
-        # Log all registered commands
-        logger.info("Registering bot commands:")
-        # Get all methods that are commands
-        for name, method in self.__class__.__dict__.items():
-            if isinstance(method, app_commands.Command):
-                logger.info(f"  /pred {method.name} - {method.description}")
-        
-        logger.info("GameCommands initialization complete")
+        logger.info(f"GameCommands registered {len(self.commands)} subcommands")
 
+    # ------------------------------------------------------------ helpers
     async def check_permissions(self, interaction: discord.Interaction) -> bool:
-        """Check if user has permission to use admin commands."""
-        # Guard against DM usage
+        """True if the user may change bot settings in this server."""
         if not interaction.guild:
-            logger.warning(f"Permission denied: {interaction.user.id} tried to use admin command in DM")
             return False
-
-        # Server owner always has permission
         if interaction.user.id == interaction.guild.owner_id:
             return True
-
-        # Check if user has Discord's Administrator permission (auto-grant)
         if interaction.user.guild_permissions.administrator:
-            logger.debug(f"Permission granted via Discord Administrator: {interaction.user.id} in guild {interaction.guild.id}")
             return True
 
-        # Check configured admin users and roles
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        settings = config.get('settings', {})
-
-        # Combine admin_users, secondary_owners, and bot_inviter
+        settings = self.bot.config_manager.get_server_config(interaction.guild.id).get('settings', {})
         authorized_users = set(settings.get('admin_users', []))
         authorized_users.update(settings.get('secondary_owners', []))
-
-        # Add bot inviter if recorded
-        bot_inviter = settings.get('bot_inviter')
-        if bot_inviter:
-            authorized_users.add(bot_inviter)
-
+        if settings.get('bot_inviter'):
+            authorized_users.add(settings['bot_inviter'])
         if interaction.user.id in authorized_users:
             return True
 
-        # Check role-based permissions (custom admin roles)
         admin_roles = set(settings.get('admin_roles', []))
-        user_role_ids = {role.id for role in interaction.user.roles}
-
-        if admin_roles & user_role_ids:  # Set intersection
+        if admin_roles & {role.id for role in interaction.user.roles}:
             return True
 
-        # Log denial for debugging
-        logger.debug(
-            f"Permission denied: user={interaction.user.id} ({interaction.user.name}) "
-            f"guild={interaction.guild.id} command={interaction.command.name if interaction.command else 'unknown'}"
-        )
+        logger.debug(f"Permission denied: user={interaction.user.id} guild={interaction.guild.id}")
         return False
 
-    def validate_config(self, config_data: dict) -> tuple[bool, str, dict]:
-        """
-        Validate configuration data and sanitize it.
-        Returns (is_valid, error_message, sanitized_config)
-        """
-        try:
-            # Basic structure validation
-            required_keys = {'settings', 'timers'}
-            if not isinstance(config_data, dict):
-                return False, "Configuration must be a dictionary", {}
-            
-            if not all(key in config_data for key in required_keys):
-                return False, f"Configuration missing required sections: {required_keys}", {}
+    async def _deny(self, interaction: discord.Interaction, what: str = "change settings") -> None:
+        await interaction.response.send_message(
+            f"You don't have permission to {what}. Ask a server admin or a bot admin.",
+            ephemeral=True,
+        )
 
-            # Initialize sanitized config with default structure
+    def _settings(self, interaction: discord.Interaction) -> dict:
+        return self.bot.config_manager.get_server_config(interaction.guild.id)['settings']
+
+    async def _preview_voice(self, interaction: discord.Interaction, text: str = PREVIEW_TEXT) -> bool:
+        """Play a short sample if the user is in a voice channel. Returns True if it played."""
+        voice = interaction.user.voice
+        if not voice or not voice.channel:
+            return False
+        try:
+            voice_client = await self.bot.voice_service.ensure_voice_client(voice.channel)
+            await self.bot.voice_service.play_announcement(voice_client, text, self._settings(interaction))
+            return True
+        except Exception as e:
+            logger.warning(f"Voice preview failed in guild {interaction.guild.id}: {e}")
+            return False
+
+    def _voice_embed(self, interaction: discord.Interaction, title: str, previewed: bool) -> discord.Embed:
+        tts = self._settings(interaction).get('tts_settings', {})
+        voice_id = tts.get('voice_name', DEFAULT_VOICE)
+        preset = find_preset(tts)
+        embed = discord.Embed(title=title, color=discord.Color.green())
+        embed.add_field(name="Voice", value=EDGE_TTS_VOICES.get(voice_id, voice_id), inline=False)
+        embed.add_field(name="Preset", value=f"`{preset}`" if preset else "Custom", inline=True)
+        embed.add_field(name="Speed", value=describe_speed(float(tts.get('speed', DEFAULT_SPEED))), inline=True)
+        embed.add_field(name="Pitch", value=describe_pitch(float(tts.get('pitch', DEFAULT_PITCH))), inline=True)
+        if previewed:
+            embed.set_footer(text="Playing a sample in your voice channel.")
+        else:
+            embed.set_footer(text="Join a voice channel and run /pred test_voice to hear it.")
+        return embed
+
+    # ------------------------------------------------------------ validation
+    def validate_config(self, config_data: dict) -> tuple[bool, str, dict]:
+        """Validate and sanitize an imported config. Returns (ok, error, sanitized)."""
+        try:
+            if not isinstance(config_data, dict):
+                return False, "Configuration must be a JSON object", {}
+            if not {'settings', 'timers'} <= set(config_data):
+                return False, "Configuration needs both 'settings' and 'timers' sections", {}
+
             sanitized = {
                 'settings': {
                     'volume': 1.0,
@@ -114,1118 +121,698 @@ class GameCommands(app_commands.Group):
                     'secondary_owners': [],
                     'bot_inviter': None,
                     'tts_settings': {
+                        'voice_name': DEFAULT_VOICE,
                         'language': 'en',
                         'accent': 'co.in',
-                        'warning_time': 30,
-                        'speed': 1.0,
-                        'pitch': 1.0,
+                        'warning_time': 0,
+                        'speed': DEFAULT_SPEED,
+                        'pitch': DEFAULT_PITCH,
                         'word_gap': 0.1,
                         'emphasis_volume': 1.2,
                         'use_phonetics': False,
                         'capitalize_proper_nouns': True,
                         'number_to_words': True,
-                        'custom_pronunciations': {}
-                    }
+                        'custom_pronunciations': {},
+                    },
                 },
-                'timers': {}
+                'timers': {},
             }
 
-            # Validate settings section
             settings = config_data.get('settings', {})
             if not isinstance(settings, dict):
-                return False, "Settings section must be a dictionary", {}
+                return False, "Settings section must be an object", {}
 
-            # Volume validation
             try:
-                volume = float(settings.get('volume', 1.0))
-                sanitized['settings']['volume'] = max(0.0, min(1.0, volume))
+                sanitized['settings']['volume'] = max(0.0, min(2.0, float(settings.get('volume', 1.0))))
             except (ValueError, TypeError):
-                sanitized['settings']['volume'] = 1.0
+                pass
 
-            # Admin roles validation
-            admin_roles = settings.get('admin_roles', [])
-            if isinstance(admin_roles, list):
-                sanitized['settings']['admin_roles'] = [
-                    int(role_id) for role_id in admin_roles 
-                    if str(role_id).isdigit()
-                ]
-                
-            # Admin users validation
-            admin_users = settings.get('admin_users', [])
-            if isinstance(admin_users, list):
-                sanitized['settings']['admin_users'] = [
-                    int(user_id) for user_id in admin_users
-                    if str(user_id).isdigit()
-                ]
+            for key in ('admin_roles', 'admin_users', 'secondary_owners'):
+                values = settings.get(key, [])
+                if isinstance(values, list):
+                    sanitized['settings'][key] = [int(v) for v in values if str(v).isdigit()]
 
-            # Secondary owners validation
-            secondary_owners = settings.get('secondary_owners', [])
-            if isinstance(secondary_owners, list):
-                sanitized['settings']['secondary_owners'] = [
-                    int(user_id) for user_id in secondary_owners
-                    if str(user_id).isdigit()
-                ]
-
-            # Bot inviter validation
             bot_inviter = settings.get('bot_inviter')
             if bot_inviter is not None and str(bot_inviter).isdigit():
                 sanitized['settings']['bot_inviter'] = int(bot_inviter)
-            else:
-                sanitized['settings']['bot_inviter'] = None
 
-            # TTS settings validation
-            tts_settings = settings.get('tts_settings', {})
-            if not isinstance(tts_settings, dict):
-                tts_settings = {}
+            tts_in = settings.get('tts_settings', {})
+            if not isinstance(tts_in, dict):
+                tts_in = {}
+            tts_out = sanitized['settings']['tts_settings']
 
-            # Voice name validation (Edge-TTS)
-            voice_name = str(tts_settings.get('voice_name', 'en-IN-NeerjaNeural'))
-            if voice_name and isinstance(voice_name, str):
-                sanitized['settings']['tts_settings']['voice_name'] = voice_name
-            else:
-                sanitized['settings']['tts_settings']['voice_name'] = 'en-IN-NeerjaNeural'
+            voice_name = str(tts_in.get('voice_name', DEFAULT_VOICE))
+            tts_out['voice_name'] = voice_name if voice_name in EDGE_TTS_VOICES else DEFAULT_VOICE
 
-            # Language and accent validation (kept for backwards compatibility)
-            language = str(tts_settings.get('language', 'en'))
-            accent = str(tts_settings.get('accent', 'co.in'))
-
-            # Check if language-accent pair is valid
+            language = str(tts_in.get('language', 'en'))
+            accent = str(tts_in.get('accent', 'co.in'))
             if (language, accent) in VALID_LANG_ACCENT_PAIRS:
-                sanitized['settings']['tts_settings']['language'] = language
-                sanitized['settings']['tts_settings']['accent'] = accent
-            
-            # Other TTS settings validation
-            try:
-                warning_time = int(tts_settings.get('warning_time', 30))
-                sanitized['settings']['tts_settings']['warning_time'] = max(0, min(60, warning_time))
-            except (ValueError, TypeError):
-                sanitized['settings']['tts_settings']['warning_time'] = 30
+                tts_out['language'], tts_out['accent'] = language, accent
 
             try:
-                speed = float(tts_settings.get('speed', 1.0))
-                sanitized['settings']['tts_settings']['speed'] = max(0.5, min(2.0, speed))
+                tts_out['warning_time'] = max(0, min(60, int(tts_in.get('warning_time', 0))))
             except (ValueError, TypeError):
-                sanitized['settings']['tts_settings']['speed'] = 1.0
+                pass
+            try:
+                tts_out['speed'] = max(0.5, min(2.0, float(tts_in.get('speed', DEFAULT_SPEED))))
+            except (ValueError, TypeError):
+                pass
+            try:
+                tts_out['pitch'] = max(0.5, min(2.0, float(tts_in.get('pitch', DEFAULT_PITCH))))
+            except (ValueError, TypeError):
+                pass
 
-            # Timers validation
+            pron = tts_in.get('custom_pronunciations', {})
+            if isinstance(pron, dict):
+                tts_out['custom_pronunciations'] = {
+                    str(k)[:50]: str(v)[:50] for k, v in pron.items() if str(k).strip()
+                }
+
             timers = config_data.get('timers', {})
             if not isinstance(timers, dict):
-                return False, "Timers section must be a dictionary", {}
+                return False, "Timers section must be an object", {}
 
             for name, timer in timers.items():
                 if not isinstance(timer, dict):
                     continue
-
-                # Check for either messages array or single message
                 messages = timer.get('messages', [timer.get('message', 'Timer event')])
                 if isinstance(messages, str):
                     messages = [messages]
                 elif not isinstance(messages, list):
                     continue
-
                 try:
                     time_value = int(timer['time'])
-                    if not 0 <= time_value <= 3600:  # Max 1 hour
-                        continue
-                        
-                    # Validate message length and content
-                    valid_messages = []
-                    for msg in messages:
-                        msg = str(msg).strip()
-                        if msg and len(msg) <= 200:  # Message length limit
-                            valid_messages.append(msg)
-                    
-                    if not valid_messages:
-                        valid_messages = ['Timer event']
-
-                    category = str(timer.get('category', TimerCategory.REMINDER.value))
-                    if category not in [cat.value for cat in TimerCategory]:
-                        category = TimerCategory.REMINDER.value
-
-                    sanitized['timers'][str(name)] = {
-                        'time': time_value,
-                        'messages': valid_messages,
-                        'category': category
-                    }
                 except (ValueError, TypeError, KeyError):
                     continue
+                if not 0 <= time_value <= 3600:
+                    continue
+
+                valid_messages = [str(m).strip() for m in messages if str(m).strip() and len(str(m)) <= 200]
+                if not valid_messages:
+                    valid_messages = ['Timer event']
+
+                category = str(timer.get('category', TimerCategory.REMINDER.value))
+                if category not in {cat.value for cat in TimerCategory}:
+                    category = TimerCategory.REMINDER.value
+
+                sanitized['timers'][str(name)[:50]] = {
+                    'time': time_value,
+                    'messages': valid_messages,
+                    'category': category,
+                }
 
             if not sanitized['timers']:
                 return False, "No valid timers found in configuration", {}
 
             return True, "", sanitized
-
         except Exception as e:
             logger.error(f"Error validating configuration: {e}")
-            return False, f"Error validating configuration: {str(e)}", {}
+            return False, f"Error validating configuration: {e}", {}
 
-
-    @app_commands.command(name="add_admin")
-    async def add_admin(self, interaction: discord.Interaction, user: discord.User):
-        """Add a user as a bot admin."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message(
-                "You don't have permission to modify admin users!",
-                ephemeral=True
-            )
+    # ============================================================ game timer
+    @app_commands.command(name="start", description="Start the game timer (join a voice channel first)")
+    @app_commands.describe(
+        time="Current in-game time as M:SS. Leave blank when minions spawn (0:00).",
+        mode="Which timer set to use",
+    )
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Standard", value="standard"),
+        app_commands.Choice(name="Nitro", value="nitro"),
+    ])
+    async def start(self, interaction: discord.Interaction, time: str = "0:00", mode: str = "standard"):
+        voice = interaction.user.voice
+        if not voice or not voice.channel:
+            await interaction.response.send_message("Join a voice channel first, then run `/pred start`.", ephemeral=True)
+            return
+        try:
+            seconds = GameTimer.parse_time(time)
+        except ValueError:
+            await interaction.response.send_message("Time must look like `M:SS`, for example `0:00` or `4:30`.", ephemeral=True)
             return
 
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        admin_users = config['settings'].get('admin_users', [])
-        
-        if user.id in admin_users:
-            await interaction.response.send_message(
-                f"{user.name} is already an admin!",
-                ephemeral=True
-            )
+        # Joining voice can take longer than Discord's 3 second reply window.
+        await interaction.response.defer()
+        try:
+            await self.bot.voice_service.ensure_voice_client(voice.channel)
+        except asyncio.TimeoutError:
+            await interaction.followup.send("Couldn't connect to your voice channel (timed out). Please try again.")
+            return
+        except Exception as e:
+            logger.error(f"[{interaction.guild.id}] Voice connect failed: {e}")
+            await interaction.followup.send(f"Couldn't connect to voice: {e}")
             return
 
-        admin_users.append(user.id)
-        self.bot.config_manager.update_server_setting(
-            interaction.guild.id,
-            'settings.admin_users',
-            admin_users
+        timer = self.bot.get_timer(interaction.guild.id)
+        timer.start(time, mode)
+
+        embed = discord.Embed(
+            title="⏱️ Game timer started",
+            description=f"Game time **{GameTimer.format_time(seconds)}** · {mode.title()} mode\n"
+                        f"Announcing in {voice.channel.mention}",
+            color=discord.Color.green(),
         )
-        
+        embed.set_footer(text="Use /pred status to see upcoming callouts, /pred stop to end.")
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="stop", description="Stop the game timer and leave voice")
+    async def stop(self, interaction: discord.Interaction):
+        timer = self.bot.get_timer(interaction.guild.id, create=False)
+        was_active = bool(timer and timer.is_active)
+        if timer:
+            timer.stop()
+        try:
+            await self.bot.voice_service.cleanup_voice_clients(interaction.guild)
+        except Exception as e:
+            logger.warning(f"[{interaction.guild.id}] Error leaving voice: {e}")
         await interaction.response.send_message(
-            f"Added {user.name} as a bot admin.",
-            ephemeral=True
+            "Game timer stopped. GG!" if was_active else "No timer was running. Left voice if I was there."
         )
 
-    @app_commands.command(name="voice_preset")
-    @app_commands.describe(
-        preset="Choose a voice preset (easy selection)"
-    )
-    async def voice_preset(self, interaction: discord.Interaction, preset: str):
-        """Change voice using a preset (recommended for quick setup)."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
-            return
+    @app_commands.command(name="status", description="Show the current game time and upcoming callouts")
+    async def status(self, interaction: discord.Interaction):
+        timer = self.bot.get_timer(interaction.guild.id, create=False)
+        voice_client = interaction.guild.voice_client
 
-        # Validate preset
-        if preset not in VOICE_PRESETS:
+        if not timer or not timer.is_active:
             await interaction.response.send_message(
-                f"Invalid preset. Use autocomplete to see available presets.",
-                ephemeral=True
+                "No timer running. Join a voice channel and use `/pred start` when minions spawn.",
+                ephemeral=True,
             )
             return
 
-        preset_config = VOICE_PRESETS[preset]
+        now = timer.get_game_time()
+        events = self.bot.config_manager.get_server_timers(interaction.guild.id, mode=timer.mode)
+        upcoming = sorted(
+            ((e['time'], name) for name, e in events.items()
+             if e.get('time', 0) >= now and name not in timer.announced_events),
+        )[:5]
 
-        # Update all TTS settings from preset
-        self.bot.config_manager.update_server_setting(
-            interaction.guild.id,
-            'settings.tts_settings.voice_name',
-            preset_config['voice_name']
-        )
-        self.bot.config_manager.update_server_setting(
-            interaction.guild.id,
-            'settings.tts_settings.speed',
-            preset_config['speed']
-        )
-        self.bot.config_manager.update_server_setting(
-            interaction.guild.id,
-            'settings.tts_settings.pitch',
-            preset_config['pitch']
-        )
-
-        # Create response embed
-        embed = discord.Embed(
-            title="Voice Preset Applied",
-            description=f"✅ {preset_config['description']}",
-            color=discord.Color.green()
-        )
-
+        embed = discord.Embed(title="⏱️ Game status", color=discord.Color.blue())
+        embed.add_field(name="Game time", value=f"**{GameTimer.format_time(now)}**", inline=True)
+        embed.add_field(name="Mode", value=timer.mode.title(), inline=True)
         embed.add_field(
-            name="Preset",
-            value=f"`{preset}`",
-            inline=True
+            name="Voice",
+            value=voice_client.channel.mention if voice_client and voice_client.is_connected() else "Not connected",
+            inline=True,
         )
-        embed.add_field(
-            name="Speed",
-            value=f"{preset_config['speed']}x",
-            inline=True
-        )
-        embed.add_field(
-            name="Pitch",
-            value=f"{preset_config['pitch']}x",
-            inline=True
-        )
-
-        embed.set_footer(text="Use /pred test_voice to hear it | Use /pred set_tts for fine-tuning")
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @voice_preset.autocomplete('preset')
-    async def preset_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-        """Autocomplete for voice presets."""
-        # Filter presets based on current input
-        filtered = [
-            (preset_id, config['description'])
-            for preset_id, config in VOICE_PRESETS.items()
-            if current.lower() in preset_id.lower() or current.lower() in config['description'].lower()
-        ]
-
-        # Sort to show Indian presets first
-        filtered.sort(key=lambda x: (
-            0 if 'indian' in x[0].lower() or 'hindi' in x[0].lower() else 1,
-            1 if 'esports' in x[0].lower() or 'hype' in x[0].lower() else 2,
-            x[0]
-        ))
-
-        return [
-            app_commands.Choice(name=description, value=preset_id)
-            for preset_id, description in filtered[:25]
-        ]
-
-    @app_commands.command(name="set_voice")
-    @app_commands.describe(
-        voice="Choose a specific voice (advanced)"
-    )
-    async def set_voice(self, interaction: discord.Interaction, voice: str):
-        """Change the TTS voice (advanced - use /pred voice_preset for easier setup)."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
-            return
-
-        # Validate voice name
-        if voice not in EDGE_TTS_VOICES:
-            await interaction.response.send_message(
-                f"Invalid voice. Use `/pred set_voice` with autocomplete to see available voices.",
-                ephemeral=True
-            )
-            return
-
-        # Update voice setting
-        self.bot.config_manager.update_server_setting(
-            interaction.guild.id,
-            'settings.tts_settings.voice_name',
-            voice
-        )
-
-        # Create response embed
-        embed = discord.Embed(
-            title="Voice Changed",
-            description=f"✅ Voice set to: **{EDGE_TTS_VOICES[voice]}**",
-            color=discord.Color.green()
-        )
-
-        embed.add_field(
-            name="Voice ID",
-            value=f"`{voice}`",
-            inline=False
-        )
-
-        embed.set_footer(text="Use /pred test_voice to hear the new voice | Tip: Use /pred voice_preset for easier setup")
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @set_voice.autocomplete('voice')
-    async def voice_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-        """Autocomplete for available voices."""
-        # Filter voices based on current input
-        filtered = [
-            (voice_id, description)
-            for voice_id, description in EDGE_TTS_VOICES.items()
-            if current.lower() in voice_id.lower() or current.lower() in description.lower()
-        ]
-
-        # Sort to show Indian voices first
-        filtered.sort(key=lambda x: (
-            0 if 'Indian' in x[1] or 'Hindi' in x[1] else 1,
-            x[1]
-        ))
-
-        return [
-            app_commands.Choice(name=description, value=voice_id)
-            for voice_id, description in filtered[:25]  # Discord limits to 25 choices
-        ]
-
-    @app_commands.command(name="set_tts")
-    @app_commands.describe(
-        speed="Voice speed (0.5 = half speed, 1.0 = normal, up to 2.0 = double speed)",
-        pitch="Voice pitch (0.5 = low, 1.0 = normal, 2.0 = high)",
-        warning_time="Warning time in seconds"
-    )
-    async def set_tts(self, interaction: discord.Interaction,
-                    speed: Optional[float] = None,
-                    pitch: Optional[float] = None,
-                    warning_time: Optional[int] = None):
-        """Configure TTS speed, pitch, and timing settings."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
-            return
-
-        # Get current settings first
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        current_settings = config['settings'].get('tts_settings', {})
-
-        # Prepare new settings, starting with current settings
-        settings = current_settings.copy()
-
-        # Validate speed and update
-        if speed is not None:
-            if 0.5 <= speed <= 2.0:
-                settings['speed'] = speed
-            else:
-                await interaction.response.send_message(
-                    "Speed must be between 0.5 (half speed) and 2.0 (double speed)",
-                    ephemeral=True
-                )
-                return
-
-        # Validate pitch and update
-        if pitch is not None:
-            if 0.5 <= pitch <= 2.0:
-                settings['pitch'] = pitch
-            else:
-                await interaction.response.send_message(
-                    "Pitch must be between 0.5 (low) and 2.0 (high)",
-                    ephemeral=True
-                )
-                return
-
-        if warning_time is not None:
-            settings['warning_time'] = max(0, min(60, warning_time))
-
-        # Update the settings
-        self.bot.config_manager.update_server_setting(
-            interaction.guild.id,
-            'settings.tts_settings',
-            settings
-        )
-
-        # Create response embed
-        embed = discord.Embed(
-            title="TTS Settings Updated",
-            color=discord.Color.green()
-        )
-
-        # Get current voice
-        voice_id = settings.get('voice_name', 'en-IN-NeerjaNeural')
-        voice_name = EDGE_TTS_VOICES.get(voice_id, voice_id)
-
-        embed.add_field(
-            name="Current Voice",
-            value=voice_name,
-            inline=False
-        )
-        embed.add_field(
-            name="Speed",
-            value=f"{settings.get('speed', 1.0)}x",
-            inline=True
-        )
-        embed.add_field(
-            name="Pitch",
-            value=f"{settings.get('pitch', 1.0)}x",
-            inline=True
-        )
-        if warning_time is not None:
+        if upcoming:
             embed.add_field(
-                name="Warning Time",
-                value=f"{settings.get('warning_time', 30)}s",
-                inline=True
+                name="Next callouts",
+                value="\n".join(f"`{GameTimer.format_time(t)}` {name.replace('_', ' ')}" for t, name in upcoming),
+                inline=False,
             )
-
-        embed.set_footer(text="Use /pred set_voice to change the voice")
-
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @set_tts.autocomplete('speed')
-    async def speed_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-        """Autocomplete for TTS speed."""
-        # Define preset speeds with descriptions
-        preset_speeds = [
-            (0.5, "Very Slow (0.5x)"),
-            (0.75, "Slow (0.75x)"),
-            (1.0, "Normal (1.0x)"),
-            (1.25, "Fast (1.25x)"),
-            (1.5, "Very Fast (1.5x)"),
-            (1.75, "Faster (1.75x)"),
-            (2.0, "Maximum (2.0x)")
-        ]
-        
-        # If user has typed something, try to parse it
-        if current:
-            try:
-                value = float(current)
-                # If it's a valid number, add it to choices if in valid range
-                if 0.5 <= value <= 2.0:
-                    preset_speeds.append((value, f"Custom ({value}x)"))
-            except ValueError:
-                pass
-
-        # Convert current to string for filtering
-        current_str = str(current).lower()
-        
-        # Filter based on current input (match against both speed value and description)
-        filtered = [
-            (value, name) for value, name in preset_speeds
-            if current_str in str(value) or current_str in name.lower()
-        ]
-        
-        # Return formatted choices
-        return [
-            app_commands.Choice(name=name, value=float(value))
-            for value, name in filtered[:25]  # Discord limits to 25 choices
-        ]
-
-    @app_commands.command(name="settings")
-    async def settings(self, interaction: discord.Interaction):
-        """Show the current server settings."""
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        settings = config.get('settings', {})
-        embed = discord.Embed(title="Server Settings", color=discord.Color.blue())
-
-        embed.add_field(name="Volume", value=f"{settings.get('volume', 1.0):.1f}", inline=True)
-
-        admin_roles = [f"<@&{rid}>" for rid in settings.get('admin_roles', [])]
-        admin_users = [f"<@{uid}>" for uid in settings.get('admin_users', [])]
-        bot_inviter = settings.get('bot_inviter')
-
-        embed.add_field(name="Admin Roles", value=', '.join(admin_roles) if admin_roles else "None", inline=False)
-        embed.add_field(name="Admin Users", value=', '.join(admin_users) if admin_users else "None", inline=False)
-
-        if bot_inviter:
-            embed.add_field(name="Bot Inviter", value=f"<@{bot_inviter}>", inline=False)
-
-        tts = settings.get('tts_settings', {})
-        voice_name = tts.get('voice_name', 'en-IN-NeerjaNeural')
-        speed = tts.get('speed', 1.0)
-        pitch = tts.get('pitch', 1.0)
-        embed.add_field(
-            name="TTS Voice",
-            value=f"🎤 {voice_name}\n⚡ Speed: {speed}x | 🎵 Pitch: {pitch}x",
-            inline=False
-        )
-
-        embed.set_footer(text="💡 Users with Discord's Administrator permission automatically have bot admin access")
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="set_volume")
-    async def set_volume(self, interaction: discord.Interaction, volume: float):
-        """Set the announcement volume (0.0 - 1.0)."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify settings!", ephemeral=True)
+    # ============================================================ speaking
+    @app_commands.command(name="say", description="Speak a message in your voice channel")
+    @app_commands.describe(message="What to say", ephemeral="Only show the confirmation to you")
+    async def say(self, interaction: discord.Interaction, message: app_commands.Range[str, 1, 300],
+                  ephemeral: bool = True):
+        voice = interaction.user.voice
+        if not voice or not voice.channel:
+            await interaction.response.send_message("Join a voice channel first.", ephemeral=True)
             return
 
-        volume = max(0.0, min(1.0, volume))
-        self.bot.config_manager.update_server_setting(
-            interaction.guild.id,
-            'settings.volume',
-            volume
-        )
+        await interaction.response.defer(ephemeral=ephemeral)
+        try:
+            voice_client = await self.bot.voice_service.ensure_voice_client(voice.channel)
+            await interaction.followup.send(f"🗣️ {message}", ephemeral=ephemeral)
+            await self.bot.voice_service.play_announcement(voice_client, message, self._settings(interaction))
+        except asyncio.TimeoutError:
+            await interaction.followup.send("Couldn't connect to voice (timed out). Please try again.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"[{interaction.guild.id}] Error in say: {e}")
+            await interaction.followup.send(f"Couldn't play that: {e}", ephemeral=True)
 
-        await interaction.response.send_message(f"Volume set to {volume:.1f}", ephemeral=True)
-
-    @app_commands.command(name="test_voice")
-    async def test_voice(self, interaction: discord.Interaction, message: Optional[str] = "This is a test"):
-        """Play a test voice line using current settings."""
-        if not interaction.user.voice:
-            await interaction.response.send_message("You need to be in a voice channel!", ephemeral=True)
-            return
-
-        voice_channel = interaction.user.voice.channel
-        voice_client = await self.bot.voice_service.ensure_voice_client(voice_channel)
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-
-        await interaction.response.send_message("Playing test message...", ephemeral=True)
-        await self.bot.voice_service.play_announcement(voice_client, message, config['settings'])
-
-    @app_commands.command(name="remove_admin")
-    async def remove_admin(self, interaction: discord.Interaction, user: discord.User):
-        """Remove a user from bot admins."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify admin users!", ephemeral=True)
-            return
-
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        admin_users = config['settings'].get('admin_users', [])
-
-        if user.id not in admin_users:
-            await interaction.response.send_message(f"{user.name} is not an admin!", ephemeral=True)
-            return
-
-        admin_users.remove(user.id)
-        self.bot.config_manager.update_server_setting(
-            interaction.guild.id,
-            'settings.admin_users',
-            admin_users
-        )
-
-        await interaction.response.send_message(f"Removed {user.name} from bot admins.", ephemeral=True)
-
-    @app_commands.command(name="add_admin_role")
-    async def add_admin_role(self, interaction: discord.Interaction, role: discord.Role):
-        """Add a role as bot admin."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify admin roles!", ephemeral=True)
-            return
-
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        admin_roles = config['settings'].get('admin_roles', [])
-
-        if role.id in admin_roles:
-            await interaction.response.send_message(f"{role.name} is already an admin role!", ephemeral=True)
-            return
-
-        admin_roles.append(role.id)
-        self.bot.config_manager.update_server_setting(
-            interaction.guild.id,
-            'settings.admin_roles',
-            admin_roles
-        )
-
-        await interaction.response.send_message(f"Added {role.name} as an admin role.", ephemeral=True)
-
-    @app_commands.command(name="sync_admins")
-    async def sync_admins(self, interaction: discord.Interaction):
-        """Manually sync Discord administrators to bot admin list."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to sync admins!", ephemeral=True)
+    @app_commands.command(name="test_voice", description="Play a sample line with the current voice settings")
+    @app_commands.describe(message="Custom text to speak (optional)")
+    async def test_voice(self, interaction: discord.Interaction, message: Optional[app_commands.Range[str, 1, 300]] = None):
+        voice = interaction.user.voice
+        if not voice or not voice.channel:
+            await interaction.response.send_message("Join a voice channel first.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
+        played = await self._preview_voice(interaction, message or PREVIEW_TEXT)
+        if played:
+            await interaction.followup.send(embed=self._voice_embed(interaction, "🔊 Voice test", True), ephemeral=True)
+        else:
+            await interaction.followup.send("Couldn't play the test line. Check the bot logs.", ephemeral=True)
 
-        try:
-            # Sync Discord admins
-            new_admins = self.bot.config_manager.sync_discord_admins(interaction.guild)
-
-            # Try to detect bot inviter
-            await self.bot._detect_bot_inviter(interaction.guild)
-
-            # Get current admin list for display
-            config = self.bot.config_manager.get_server_config(interaction.guild.id)
-            settings = config.get('settings', {})
-            admin_users = settings.get('admin_users', [])
-            bot_inviter = settings.get('bot_inviter')
-
-            embed = discord.Embed(
-                title="Admin Sync Complete",
-                color=discord.Color.green()
-            )
-
-            if new_admins > 0:
-                embed.description = f"✅ Added {new_admins} new Discord administrator(s) to bot admin list"
-            else:
-                embed.description = "✅ All Discord administrators are already synced"
-
-            embed.add_field(
-                name="Total Bot Admins",
-                value=str(len(admin_users)),
-                inline=True
-            )
-
-            if bot_inviter:
-                embed.add_field(
-                    name="Bot Inviter",
-                    value=f"<@{bot_inviter}>",
-                    inline=True
-                )
-
-            embed.set_footer(text="Bot automatically syncs Discord admins daily")
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
-
-        except Exception as e:
-            logger.error(f"Error in sync_admins command: {e}")
-            await interaction.followup.send(
-                f"Error syncing admins: {str(e)}",
-                ephemeral=True
-            )
-
-    @app_commands.command(name="edit_timer")
-    @app_commands.choices(category=[
-        app_commands.Choice(name=cat.name.title(), value=cat.value)
-        for cat in TimerCategory
+    # ============================================================ voice settings
+    @app_commands.command(name="voice_preset", description="Pick a voice from the list (easiest way to change the voice)")
+    @app_commands.describe(preset="Voice preset", preview="Play a sample right away if you're in voice")
+    @app_commands.choices(preset=[
+        app_commands.Choice(name=cfg['description'], value=name)
+        for name, cfg in VOICE_PRESETS.items()
     ])
-    async def edit_timer(self, interaction: discord.Interaction,
-                         name: str, time: str, message: Optional[str] = None,
-                         category: str = TimerCategory.REMINDER.value):
-        """Edit an existing timer."""
+    async def voice_preset(self, interaction: discord.Interaction, preset: str, preview: bool = True):
         if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify timers!", ephemeral=True)
+            await self._deny(interaction)
+            return
+        cfg = VOICE_PRESETS.get(preset)
+        if not cfg:
+            await interaction.response.send_message("Unknown preset. Pick one from the list.", ephemeral=True)
             return
 
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        timer = config.get('timers', {}).get(name)
-        if not timer:
-            await interaction.response.send_message(f"Timer '{name}' not found", ephemeral=True)
+        cm = self.bot.config_manager
+        gid = interaction.guild.id
+        cm.update_server_setting(gid, 'settings.tts_settings.voice_name', cfg['voice_name'])
+        cm.update_server_setting(gid, 'settings.tts_settings.speed', cfg['speed'])
+        cm.update_server_setting(gid, 'settings.tts_settings.pitch', cfg['pitch'])
+
+        await interaction.response.defer(ephemeral=True)
+        played = preview and await self._preview_voice(interaction)
+        await interaction.followup.send(embed=self._voice_embed(interaction, "✅ Voice preset applied", played), ephemeral=True)
+
+    @app_commands.command(name="set_voice", description="Choose a specific voice by name (advanced)")
+    @app_commands.describe(voice="Start typing to search voices", preview="Play a sample right away if you're in voice")
+    async def set_voice(self, interaction: discord.Interaction, voice: str, preview: bool = True):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction)
+            return
+        if voice not in EDGE_TTS_VOICES:
+            await interaction.response.send_message("Unknown voice. Use the autocomplete list.", ephemeral=True)
             return
 
-        try:
-            minutes, seconds = map(int, time.split(':'))
-            total_seconds = minutes * 60 + seconds
-        except ValueError:
-            await interaction.response.send_message("Invalid time format. Use M:SS (e.g., 5:30)", ephemeral=True)
+        self.bot.config_manager.update_server_setting(interaction.guild.id, 'settings.tts_settings.voice_name', voice)
+        await interaction.response.defer(ephemeral=True)
+        played = preview and await self._preview_voice(interaction)
+        await interaction.followup.send(embed=self._voice_embed(interaction, "✅ Voice changed", played), ephemeral=True)
+
+    @set_voice.autocomplete('voice')
+    async def voice_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        current = current.lower()
+        matches = [
+            (vid, desc) for vid, desc in EDGE_TTS_VOICES.items()
+            if current in vid.lower() or current in desc.lower()
+        ]
+        matches.sort(key=lambda x: (0 if '-IN-' in x[0] else 1, x[1]))
+        return [app_commands.Choice(name=f"{desc} ({vid})"[:100], value=vid) for vid, desc in matches[:25]]
+
+    @app_commands.command(name="set_tts", description="Adjust speed, pitch and how early callouts play")
+    @app_commands.describe(
+        speed="How fast the voice talks",
+        pitch="Voice pitch",
+        warning_time="Seconds before an event to announce it (0 = right on time)",
+        preview="Play a sample right away if you're in voice",
+    )
+    @app_commands.choices(
+        speed=[app_commands.Choice(name=label, value=value) for value, label in SPEED_CHOICES],
+        pitch=[app_commands.Choice(name=label, value=value) for value, label in PITCH_CHOICES],
+    )
+    async def set_tts(self, interaction: discord.Interaction,
+                      speed: Optional[app_commands.Choice[float]] = None,
+                      pitch: Optional[app_commands.Choice[float]] = None,
+                      warning_time: Optional[app_commands.Range[int, 0, 60]] = None,
+                      preview: bool = True):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction)
+            return
+        if speed is None and pitch is None and warning_time is None:
+            await interaction.response.send_message(
+                "Nothing to change. Pick a speed, pitch or warning time.", ephemeral=True
+            )
             return
 
-        messages = timer.get('messages', [])
-        if message:
-            messages = [message]
+        cm = self.bot.config_manager
+        gid = interaction.guild.id
+        if speed is not None:
+            cm.update_server_setting(gid, 'settings.tts_settings.speed', float(speed.value))
+        if pitch is not None:
+            cm.update_server_setting(gid, 'settings.tts_settings.pitch', float(pitch.value))
+        if warning_time is not None:
+            cm.update_server_setting(gid, 'settings.tts_settings.warning_time', int(warning_time))
 
-        self.bot.config_manager.update_timer(
-            interaction.guild.id,
-            name,
-            total_seconds,
-            messages,
-            category
+        await interaction.response.defer(ephemeral=True)
+        played = preview and (speed is not None or pitch is not None) and await self._preview_voice(interaction)
+        embed = self._voice_embed(interaction, "✅ TTS settings updated", played)
+        embed.add_field(
+            name="Warning time",
+            value=f"{self._settings(interaction)['tts_settings'].get('warning_time', 0)}s before each event",
+            inline=False,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="set_volume", description="Set announcement volume as a percentage")
+    @app_commands.describe(volume="0 to 200 percent (100 = normal)")
+    async def set_volume(self, interaction: discord.Interaction, volume: app_commands.Range[int, 0, 200]):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction)
+            return
+        self.bot.config_manager.update_server_setting(interaction.guild.id, 'settings.volume', volume / 100)
+        await interaction.response.send_message(f"🔊 Volume set to {volume}%.", ephemeral=True)
+
+    @app_commands.command(name="settings", description="Show this server's bot settings")
+    async def settings(self, interaction: discord.Interaction):
+        settings = self._settings(interaction)
+        tts = settings.get('tts_settings', {})
+        voice_id = tts.get('voice_name', DEFAULT_VOICE)
+        preset = find_preset(tts)
+
+        embed = discord.Embed(title="⚙️ Lane Guardian settings", color=discord.Color.blue())
+        embed.add_field(
+            name="Voice",
+            value=(
+                f"{EDGE_TTS_VOICES.get(voice_id, voice_id)}\n"
+                f"Preset: `{preset}`" + ("" if preset else " (custom)") + "\n"
+                f"Speed: {describe_speed(float(tts.get('speed', DEFAULT_SPEED)))} · "
+                f"Pitch: {describe_pitch(float(tts.get('pitch', DEFAULT_PITCH)))}\n"
+                f"Volume: {round(float(settings.get('volume', 1.0)) * 100)}% · "
+                f"Warning: {tts.get('warning_time', 0)}s early"
+            ),
+            inline=False,
         )
 
-        await interaction.response.send_message(f"Timer '{name}' updated", ephemeral=True)
+        admin_roles = [f"<@&{rid}>" for rid in settings.get('admin_roles', [])]
+        admin_users = [f"<@{uid}>" for uid in settings.get('admin_users', [])]
+        embed.add_field(name="Admin roles", value=', '.join(admin_roles) or "None", inline=False)
+        embed.add_field(name="Admin users", value=', '.join(admin_users[:20]) or "None", inline=False)
+        if settings.get('bot_inviter'):
+            embed.add_field(name="Bot inviter", value=f"<@{settings['bot_inviter']}>", inline=False)
 
-    @app_commands.command(name="start")
-    @app_commands.describe(
-        time="Game time in M:SS format (defaults to 0:00)",
-        mode="Game mode (standard or nitro)"
-    )
-    async def start(self, interaction: discord.Interaction, time: str = "00:00", mode: str = "standard"):
-        """Start the game timer."""
+        timers = self.bot.config_manager.get_server_timers(interaction.guild.id)
+        embed.add_field(name="Timers", value=f"{len(timers)} configured (see `/pred list_timers`)", inline=False)
+        embed.set_footer(text="Change the voice with /pred voice_preset · Server admins always have access")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="help", description="How to use Lane Guardian")
+    async def help(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="🎮 Lane Guardian",
+            description="Voice callouts for Predecessor objectives and timings.",
+            color=discord.Color.purple(),
+        )
+        embed.add_field(
+            name="During a game",
+            value=(
+                "`/pred start` when minions spawn (or `/pred start time:4:30` if you're late)\n"
+                "`/pred status` to see what's coming up\n"
+                "`/pred stop` when the game ends"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Voice",
+            value=(
+                "`/pred voice_preset` pick a voice from the list\n"
+                "`/pred set_tts` speed, pitch and warning time\n"
+                "`/pred set_volume` 0 to 200%\n"
+                "`/pred test_voice` or `/pred say` to hear it"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Timers (admins)",
+            value=(
+                "`/pred list_timers`, `/pred add_timer`, `/pred edit_timer`, `/pred remove_timer`\n"
+                "`/pred export_config` / `/pred import_config` to back up or share"
+            ),
+            inline=False,
+        )
+        embed.set_footer(text="The bot leaves voice automatically when the channel empties or after 5 idle minutes.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ============================================================ admins
+    @app_commands.command(name="add_admin", description="Allow a user to manage the bot")
+    async def add_admin(self, interaction: discord.Interaction, user: discord.User):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction, "manage bot admins")
+            return
+        admin_users = list(self._settings(interaction).get('admin_users', []))
+        if user.id in admin_users:
+            await interaction.response.send_message(f"{user.mention} is already a bot admin.", ephemeral=True)
+            return
+        admin_users.append(user.id)
+        self.bot.config_manager.update_server_setting(interaction.guild.id, 'settings.admin_users', admin_users)
+        await interaction.response.send_message(f"Added {user.mention} as a bot admin.", ephemeral=True)
+
+    @app_commands.command(name="remove_admin", description="Remove a user from bot admins")
+    async def remove_admin(self, interaction: discord.Interaction, user: discord.User):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction, "manage bot admins")
+            return
+        admin_users = list(self._settings(interaction).get('admin_users', []))
+        if user.id not in admin_users:
+            await interaction.response.send_message(f"{user.mention} is not a bot admin.", ephemeral=True)
+            return
+        admin_users.remove(user.id)
+        self.bot.config_manager.update_server_setting(interaction.guild.id, 'settings.admin_users', admin_users)
+        await interaction.response.send_message(f"Removed {user.mention} from bot admins.", ephemeral=True)
+
+    @app_commands.command(name="add_admin_role", description="Allow everyone with a role to manage the bot")
+    async def add_admin_role(self, interaction: discord.Interaction, role: discord.Role):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction, "manage admin roles")
+            return
+        admin_roles = list(self._settings(interaction).get('admin_roles', []))
+        if role.id in admin_roles:
+            await interaction.response.send_message(f"{role.mention} is already an admin role.", ephemeral=True)
+            return
+        admin_roles.append(role.id)
+        self.bot.config_manager.update_server_setting(interaction.guild.id, 'settings.admin_roles', admin_roles)
+        await interaction.response.send_message(f"Added {role.mention} as an admin role.", ephemeral=True)
+
+    @app_commands.command(name="remove_admin_role", description="Remove a role from bot admins")
+    async def remove_admin_role(self, interaction: discord.Interaction, role: discord.Role):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction, "manage admin roles")
+            return
+        admin_roles = list(self._settings(interaction).get('admin_roles', []))
+        if role.id not in admin_roles:
+            await interaction.response.send_message(f"{role.mention} is not an admin role.", ephemeral=True)
+            return
+        admin_roles.remove(role.id)
+        self.bot.config_manager.update_server_setting(interaction.guild.id, 'settings.admin_roles', admin_roles)
+        await interaction.response.send_message(f"Removed {role.mention} from admin roles.", ephemeral=True)
+
+    @app_commands.command(name="sync_admins", description="Re-scan Discord administrators into the bot admin list")
+    async def sync_admins(self, interaction: discord.Interaction):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction, "sync admins")
+            return
+        await interaction.response.defer(ephemeral=True)
         try:
-            if not interaction.user.voice:
-                await interaction.response.send_message("You need to be in a voice channel!")
-                return
-
-            voice_channel = interaction.user.voice.channel
-            await self.bot.voice_service.ensure_voice_client(voice_channel, force_new=True)
-            
-            self.bot.timer.start(time, mode)
-            await interaction.response.send_message(f"Game timer started at {time} in {mode} mode")
-            
-        except ValueError:
-            await interaction.response.send_message("Invalid time format. Use M:SS (e.g., 0:05)")
+            new_admins = self.bot.config_manager.sync_discord_admins(interaction.guild)
+            await self.bot._detect_bot_inviter(interaction.guild)
+            settings = self._settings(interaction)
+            embed = discord.Embed(
+                title="Admin sync complete",
+                description=(f"Added {new_admins} new Discord administrator(s)." if new_admins
+                             else "All Discord administrators were already synced."),
+                color=discord.Color.green(),
+            )
+            embed.add_field(name="Total bot admins", value=str(len(settings.get('admin_users', []))), inline=True)
+            if settings.get('bot_inviter'):
+                embed.add_field(name="Bot inviter", value=f"<@{settings['bot_inviter']}>", inline=True)
+            embed.set_footer(text="Admins are also synced automatically once a day.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
-            logger.error(f"Error in start command: {e}")
-            await interaction.response.send_message(f"Error: {str(e)}")
+            logger.error(f"Error in sync_admins: {e}")
+            await interaction.followup.send(f"Error syncing admins: {e}", ephemeral=True)
 
-    @app_commands.command(name="stop")
-    async def stop(self, interaction: discord.Interaction):
-        """Stop the game timer."""
-        self.bot.timer.stop()
-        
-        for voice_client in self.bot.voice_clients:
-            if voice_client.guild == interaction.guild:
-                await self.bot.voice_service.cleanup_voice_clients(interaction.guild)
-            
-        await interaction.response.send_message("Game timer stopped")
-
-    @app_commands.command(name="add_timer")
-    @app_commands.choices(category=[
-        app_commands.Choice(name=cat.name.title(), value=cat.value)
-        for cat in TimerCategory
-    ])
-    async def add_timer(self, interaction: discord.Interaction, 
-                       name: str, time: str, message: str, 
-                       category: str = TimerCategory.REMINDER.value):
-        """Add a new timer event."""
+    # ============================================================ timers
+    @app_commands.command(name="add_timer", description="Add a callout (or add another message to an existing one)")
+    @app_commands.describe(name="Short id, e.g. fangtooth_spawn", time="Game time as M:SS", message="What to say",
+                           category="Category")
+    @app_commands.choices(category=CATEGORY_CHOICES)
+    async def add_timer(self, interaction: discord.Interaction, name: app_commands.Range[str, 1, 50], time: str,
+                        message: app_commands.Range[str, 1, 200], category: str = TimerCategory.REMINDER.value):
         if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to add timers!")
+            await self._deny(interaction, "add timers")
             return
-
         try:
-            # Convert time string to seconds
-            minutes, seconds = map(int, time.split(':'))
-            total_seconds = minutes * 60 + seconds
-
-            # Get existing timer if it exists
-            config = self.bot.config_manager.get_server_config(interaction.guild.id)
-            existing_timer = config.get('timers', {}).get(name, {})
-            
-            # Get existing messages or create new list
-            messages = existing_timer.get('messages', [])
-            if message not in messages:
-                messages.append(message)
-
-            self.bot.config_manager.update_timer(
-                interaction.guild.id,
-                name,
-                total_seconds,
-                messages,
-                category
-            )
-
-            # Create response message
-            msg_count = len(messages)
-            await interaction.response.send_message(
-                f"Timer '{name}' updated at {time} with {msg_count} message{'s' if msg_count > 1 else ''}"
-            )
-            
+            total_seconds = GameTimer.parse_time(time)
         except ValueError:
-            await interaction.response.send_message("Invalid time format. Use M:SS (e.g., 5:30)")
-        except Exception as e:
-            logger.error(f"Error adding timer: {e}")
-            await interaction.response.send_message(f"Error adding timer: {str(e)}")
-
-    @app_commands.command(name="remove_timer")
-    async def remove_timer(self, interaction: discord.Interaction, name: str):
-        """Remove a timer event."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to remove timers!")
+            await interaction.response.send_message("Time must look like `M:SS`, for example `5:30`.", ephemeral=True)
             return
 
-        if self.bot.config_manager.remove_timer(interaction.guild.id, name):
-            await interaction.response.send_message(f"Timer '{name}' removed")
-        else:
-            await interaction.response.send_message(f"Timer '{name}' not found")
+        name = name.strip().lower().replace(' ', '_')
+        existing = self.bot.config_manager.get_server_timers(interaction.guild.id).get(name, {})
+        messages = list(existing.get('messages', []))
+        if message not in messages:
+            messages.append(message)
 
-    @app_commands.command(name="remove_timer_message")
-    async def remove_timer_message(self, interaction: discord.Interaction, 
-                             timer_name: str, message_index: int):
-        """Remove a specific message from a timer."""
+        self.bot.config_manager.update_timer(interaction.guild.id, name, total_seconds, messages, category)
+        await interaction.response.send_message(
+            f"Timer `{name}` set for **{GameTimer.format_time(total_seconds)}** "
+            f"with {len(messages)} message{'s' if len(messages) != 1 else ''}.",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="edit_timer", description="Change a callout's time, message or category")
+    @app_commands.describe(name="Timer id (see /pred list_timers)", time="New game time as M:SS",
+                           message="Replace all messages with this one (optional)", category="Category")
+    @app_commands.choices(category=CATEGORY_CHOICES)
+    async def edit_timer(self, interaction: discord.Interaction, name: str, time: str,
+                         message: Optional[app_commands.Range[str, 1, 200]] = None,
+                         category: Optional[str] = None):
         if not await self.check_permissions(interaction):
-            await interaction.response.send_message("You don't have permission to modify timers!")
+            await self._deny(interaction, "edit timers")
             return
-
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        timer = config.get('timers', {}).get(timer_name)
-        
+        timer = self.bot.config_manager.get_server_timers(interaction.guild.id).get(name)
         if not timer:
-            await interaction.response.send_message(f"Timer '{timer_name}' not found")
+            await interaction.response.send_message(f"Timer `{name}` not found.", ephemeral=True)
             return
-            
-        messages = timer.get('messages', [])
+        try:
+            total_seconds = GameTimer.parse_time(time)
+        except ValueError:
+            await interaction.response.send_message("Time must look like `M:SS`, for example `5:30`.", ephemeral=True)
+            return
+
+        messages = [message] if message else timer.get('messages', ['Timer event'])
+        self.bot.config_manager.update_timer(
+            interaction.guild.id, name, total_seconds, messages,
+            category or timer.get('category', TimerCategory.REMINDER.value),
+        )
+        await interaction.response.send_message(f"Timer `{name}` updated.", ephemeral=True)
+
+    @app_commands.command(name="remove_timer", description="Delete a callout")
+    async def remove_timer(self, interaction: discord.Interaction, name: str):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction, "remove timers")
+            return
+        if self.bot.config_manager.remove_timer(interaction.guild.id, name):
+            await interaction.response.send_message(f"Timer `{name}` removed.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"Timer `{name}` not found.", ephemeral=True)
+
+    @app_commands.command(name="remove_timer_message", description="Delete one message from a callout")
+    @app_commands.describe(timer_name="Timer id", message_index="Message number shown in /pred list_timers")
+    async def remove_timer_message(self, interaction: discord.Interaction, timer_name: str,
+                                   message_index: app_commands.Range[int, 0, 50]):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction, "edit timers")
+            return
+        timer = self.bot.config_manager.get_server_timers(interaction.guild.id).get(timer_name)
+        if not timer:
+            await interaction.response.send_message(f"Timer `{timer_name}` not found.", ephemeral=True)
+            return
+        messages = list(timer.get('messages', []))
         if not 0 <= message_index < len(messages):
             await interaction.response.send_message(
-                f"Invalid message index. Timer has {len(messages)} message(s)"
+                f"Invalid message number. This timer has {len(messages)} message(s).", ephemeral=True
             )
             return
-            
-        removed_message = messages.pop(message_index)
-        
-        if not messages:  # Don't allow empty message list
+        removed = messages.pop(message_index)
+        if not messages:
             messages = ["Timer event"]
-            
         self.bot.config_manager.update_timer(
-            interaction.guild.id,
-            timer_name,
-            timer['time'],
-            messages,
-            timer['category']
+            interaction.guild.id, timer_name, timer['time'], messages,
+            timer.get('category', TimerCategory.REMINDER.value),
         )
-        
-        await interaction.response.send_message(
-            f"Removed message from timer '{timer_name}': {removed_message}"
-        )
+        await interaction.response.send_message(f"Removed from `{timer_name}`: {removed}", ephemeral=True)
 
-    @app_commands.command(name="list_timers")
+    @app_commands.command(name="list_timers", description="List all callouts, optionally by category")
+    @app_commands.choices(category=CATEGORY_CHOICES)
     async def list_timers(self, interaction: discord.Interaction, category: Optional[str] = None):
-        """List all configured timers, optionally filtered by category."""
         timers = self.bot.config_manager.get_server_timers(interaction.guild.id, category)
-        
         if not timers:
             await interaction.response.send_message(
-                "No timers found" + (f" for category: {category}" if category else ""),
-                ephemeral=True
+                "No timers found" + (f" in category `{category}`" if category else "") + ".", ephemeral=True
             )
             return
 
-        # Sort timers by time
-        sorted_timers = sorted(timers.items(), key=lambda x: x[1]['time'])
-        
-        # Split timers into chunks of 25 for multiple embeds
-        chunk_size = 25
-        timer_chunks = [sorted_timers[i:i + chunk_size] for i in range(0, len(sorted_timers), chunk_size)]
-        
+        sorted_timers = sorted(timers.items(), key=lambda kv: kv[1].get('time', 0))
+        chunk_size = 20
         embeds = []
-        for i, chunk in enumerate(timer_chunks):
+        for i in range(0, len(sorted_timers), chunk_size):
+            chunk = sorted_timers[i:i + chunk_size]
             embed = discord.Embed(
-                title=f"Configured Timers (Page {i+1}/{len(timer_chunks)})",
-                color=discord.Color.blue()
+                title=f"Callouts ({i // chunk_size + 1}/{(len(sorted_timers) - 1) // chunk_size + 1})",
+                description=f"Category: `{category}`" if category else None,
+                color=discord.Color.blue(),
             )
-
-            if category:
-                embed.description = f"Filtered by category: {category}"
-
-            # Add timer fields for this chunk
             for name, timer in chunk:
-                minutes = timer['time'] // 60
-                seconds = timer['time'] % 60
                 messages = timer.get('messages', ['No message'])
-                
-                # Format message list
-                message_text = '\n'.join(f"{idx}. {msg}" 
-                                     for idx, msg in enumerate(messages))
-                
+                text = '\n'.join(f"{idx}. {msg}" for idx, msg in enumerate(messages))
                 embed.add_field(
-                    name=f"{minutes:02d}:{seconds:02d} - {name}",
-                    value=f"Category: {timer.get('category', 'uncategorized')}\n{message_text}",
-                    inline=False
+                    name=f"{GameTimer.format_time(timer.get('time', 0))} · {name}",
+                    value=f"*{timer.get('category', 'uncategorized')}*\n{text}"[:1024],
+                    inline=False,
                 )
-            
             embeds.append(embed)
 
-        # Send the first embed
-        await interaction.response.send_message(embed=embeds[0])
-        
-        # Send additional embeds if they exist
-        if len(embeds) > 1:
-            try:
-                for embed in embeds[1:]:
-                    await interaction.followup.send(embed=embed)
-            except Exception as e:
-                logger.error(f"Error sending additional timer pages: {e}")
-                await interaction.followup.send(
-                    "Error displaying all timers. Some pages may be missing.",
-                    ephemeral=True
-                )
+        await interaction.response.send_message(embed=embeds[0], ephemeral=True)
+        for embed in embeds[1:]:
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="export_config")
+    # ============================================================ import / export
+    @app_commands.command(name="export_config", description="Download this server's settings and timers as JSON")
     async def export_config(self, interaction: discord.Interaction):
-        """Export the current server configuration."""
         try:
             config = self.bot.config_manager.get_server_config(interaction.guild.id)
-            
-            # Convert config to a formatted JSON string
-            config_str = json.dumps(config, indent=2)
-            
-            # Create an embed with the export details
+            data = io.BytesIO(json.dumps(config, indent=2).encode('utf-8'))
+            tts = config['settings'].get('tts_settings', {})
             embed = discord.Embed(
-                title="Server Configuration Export",
-                description="Configuration file is attached below.",
-                color=discord.Color.blue()
+                title="Configuration export",
+                description=(f"• {len(config.get('timers', {}))} timers\n"
+                             f"• Voice: {tts.get('voice_name', DEFAULT_VOICE)}\n"
+                             f"• Speed: {tts.get('speed', DEFAULT_SPEED)}x"),
+                color=discord.Color.blue(),
             )
-            
-            # Add settings summary
-            timer_count = len(config.get('timers', {}))
-            tts_settings = config['settings']['tts_settings']
-            
-            embed.add_field(
-                name="Configuration Summary",
-                value=f"• {timer_count} timers configured\n"
-                      f"• Language: {tts_settings.get('language', 'en')}\n"
-                      f"• Accent: {tts_settings.get('accent', 'co.in')}\n"
-                      f"• Speed: {tts_settings.get('speed', 1.0)}x\n"
-                      f"• Volume: {config['settings'].get('volume', 1.0)}",
-                inline=False
-            )
-
-            # Create a temporary file
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as temp_file:
-                temp_file.write(config_str)
-                temp_file.flush()
-                
-                # Send the embed with the file
-                await interaction.response.send_message(
-                    embed=embed,
-                    file=discord.File(temp_file.name, filename=f"config_{interaction.guild.name}.json"),
-                    ephemeral=True
-                )
-
-            # Clean up
-            os.unlink(temp_file.name)
-            
-        except Exception as e:
-            logger.error(f"Error exporting config: {e}")
-            await interaction.response.send_message(
-                "Error exporting configuration. Please try again.",
-                ephemeral=True
-            )
-
-    @app_commands.command(name="import_config")
-    @app_commands.describe(
-        file="The configuration file to import (JSON)",
-        merge="Whether to merge with existing configuration or replace entirely",
-        keep_existing_timers="Keep existing timers when importing (only with merge=True)"
-    )
-    async def import_config(self, 
-                        interaction: discord.Interaction, 
-                        file: discord.Attachment,
-                        merge: bool = True,
-                        keep_existing_timers: bool = True):
-        """Import a server configuration from a JSON file."""
-        if not await self.check_permissions(interaction):
-            await interaction.response.send_message(
-                "You need admin permissions to import configurations!",
-                ephemeral=True
-            )
-            return
-            
-        try:
-            # Check file size and type
-            if file.size > 1024 * 1024:  # 1MB limit
-                await interaction.response.send_message(
-                    "File too large. Configuration files should be under 1MB.",
-                    ephemeral=True
-                )
-                return
-
-            if not file.filename.endswith('.json'):
-                await interaction.response.send_message(
-                    "Please provide a .json file containing the configuration.",
-                    ephemeral=True
-                )
-                return
-
-            # Read and parse the file
-            config_bytes = await file.read()
-            config_str = config_bytes.decode('utf-8')
-            
-            try:
-                config_data = json.loads(config_str)
-            except json.JSONDecodeError:
-                await interaction.response.send_message(
-                    "Invalid JSON format. Please ensure the file contains valid JSON.",
-                    ephemeral=True
-                )
-                return
-            
-            # Validate and sanitize the configuration
-            is_valid, error_message, sanitized_config = self.validate_config(config_data)
-            
-            if not is_valid:
-                await interaction.response.send_message(
-                    f"Invalid configuration: {error_message}",
-                    ephemeral=True
-                )
-                return
-            
-            # Get current config if merging
-            if merge:
-                current_config = self.bot.config_manager.get_server_config(interaction.guild.id)
-                
-                if keep_existing_timers:
-                    # Merge timers, keeping existing ones
-                    sanitized_config['timers'] = {
-                        **current_config.get('timers', {}),
-                        **sanitized_config.get('timers', {})
-                    }
-                
-                # Merge settings
-                current_config['settings'].update(sanitized_config['settings'])
-                sanitized_config = current_config
-            
-            # Update the server configuration
-            self.bot.config_manager.configs[str(interaction.guild.id)] = sanitized_config
-            self.bot.config_manager.save_configs()
-            
-            # Create summary embed
-            embed = discord.Embed(
-                title="Configuration Imported Successfully",
-                color=discord.Color.green()
-            )
-            
-            timer_count = len(sanitized_config.get('timers', {}))
-            tts_settings = sanitized_config['settings']['tts_settings']
-            voice_name = tts_settings.get('voice_name', 'en-IN-NeerjaNeural')
-
-            embed.add_field(
-                name="Imported Configuration",
-                value=f"• {timer_count} total timers\n"
-                      f"• Voice: {voice_name}\n"
-                      f"• Speed: {tts_settings['speed']}x\n"
-                      f"• Pitch: {tts_settings.get('pitch', 1.0)}x\n"
-                      f"• Warning Time: {tts_settings.get('warning_time', 30)}s\n"
-                      f"• Volume: {sanitized_config['settings']['volume']:.1f}",
-                inline=False
-            )
-            
-            if merge:
-                embed.add_field(
-                    name="Merge Details",
-                    value="✓ Merged with existing configuration\n" +
-                          ("✓ Kept existing timers\n" if keep_existing_timers else "✗ Replaced existing timers\n"),
-                    inline=False
-                )
-            
             await interaction.response.send_message(
                 embed=embed,
-                ephemeral=True
+                file=discord.File(data, filename=f"lane_guardian_{interaction.guild.id}.json"),
+                ephemeral=True,
             )
-            
         except Exception as e:
-            logger.error(f"Error importing config: {e}")
-            await interaction.response.send_message(
-                "Error importing configuration. Please check the file and try again.",
-                ephemeral=True
-            )
+            logger.error(f"Error exporting config: {e}")
+            await interaction.response.send_message("Error exporting configuration.", ephemeral=True)
 
-
-    @app_commands.command(name="say")
+    @app_commands.command(name="import_config", description="Import settings and timers from a JSON file")
     @app_commands.describe(
-        message="Message to speak through TTS",
-        ephemeral="Whether to show the command response only to you"
+        file="A JSON file from /pred export_config",
+        merge="Merge into the current configuration instead of replacing it",
+        keep_existing_timers="When merging, keep timers that aren't in the file",
     )
-    async def say(self, 
-                interaction: discord.Interaction, 
-                message: str,
-                ephemeral: bool = True):
-        """Say a message through TTS."""
+    async def import_config(self, interaction: discord.Interaction, file: discord.Attachment,
+                            merge: bool = True, keep_existing_timers: bool = True):
+        if not await self.check_permissions(interaction):
+            await self._deny(interaction, "import configurations")
+            return
+        if file.size > 1024 * 1024:
+            await interaction.response.send_message("File too large (max 1 MB).", ephemeral=True)
+            return
+        if not file.filename.lower().endswith('.json'):
+            await interaction.response.send_message("Please upload a `.json` file.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
         try:
-            # First check for voice channel
-            if not interaction.user.voice:
-                await interaction.response.send_message(
-                    "You need to be in a voice channel!", 
-                    ephemeral=True
-                )
-                return
+            config_data = json.loads((await file.read()).decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            await interaction.followup.send("That file isn't valid JSON.", ephemeral=True)
+            return
 
-            # Send initial response before attempting voice connection
-            await interaction.response.send_message(
-                "Connecting to voice channel...", 
-                ephemeral=ephemeral
-            )
+        is_valid, error, sanitized = self.validate_config(config_data)
+        if not is_valid:
+            await interaction.followup.send(f"Invalid configuration: {error}", ephemeral=True)
+            return
 
-            try:
-                voice_channel = interaction.user.voice.channel
-                voice_client = await self.bot.voice_service.ensure_voice_client(voice_channel)
-                
-                # Get server settings and play message
-                config = self.bot.config_manager.get_server_config(interaction.guild.id)
-                
-                # Update message about playing
-                await interaction.edit_original_response(
-                    content=f"Playing: {message}"
-                )
-                
-                await self.bot.voice_service.play_announcement(
-                    voice_client,
-                    message,
-                    config['settings']
-                )
-                
-            except asyncio.TimeoutError:
-                await interaction.edit_original_response(
-                    content="Failed to connect to voice channel (timeout). Please try again."
-                )
-            except Exception as e:
-                logger.error(f"Error in voice connection/playback: {e}")
-                await interaction.edit_original_response(
-                    content=f"Error playing message: {str(e)}"
-                )
-                
-        except Exception as e:
-            logger.error(f"Error in say command: {e}")
-            # Only try to respond if we haven't already
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    f"Error: {str(e)}", 
-                    ephemeral=True
-                )
+        cm = self.bot.config_manager
+        if merge:
+            current = cm.get_server_config(interaction.guild.id)
+            if keep_existing_timers:
+                sanitized['timers'] = {**current.get('timers', {}), **sanitized['timers']}
+            merged_settings = {**current.get('settings', {}), **sanitized['settings']}
+            # Never let an import wipe the admin lists.
+            for key in ('admin_users', 'admin_roles', 'secondary_owners'):
+                merged_settings[key] = sorted(set(current['settings'].get(key, [])) | set(sanitized['settings'].get(key, [])))
+            sanitized = {**current, 'settings': merged_settings, 'timers': sanitized['timers']}
 
-    @list_timers.autocomplete('category')
-    async def category_autocomplete(self, 
-                                  interaction: discord.Interaction, 
-                                  current: str) -> List[app_commands.Choice[str]]:
-        """Autocomplete for timer categories."""
-        categories = set()
-        config = self.bot.config_manager.get_server_config(interaction.guild.id)
-        
-        # Collect all unique categories
-        for timer in config.get('timers', {}).values():
-            if cat := timer.get('category'):
-                categories.add(cat)
-        
-        # Filter and sort categories based on current input
-        filtered = [
-            cat for cat in categories 
-            if current.lower() in cat.lower()
-        ]
-        filtered.sort()
-        
-        return [
-            app_commands.Choice(name=cat, value=cat)
-            for cat in filtered[:25]  # Discord limits to 25 choices
-        ]
-    
-    
+        cm.configs[str(interaction.guild.id)] = sanitized
+        cm.save_configs()
+
+        tts = sanitized['settings']['tts_settings']
+        embed = discord.Embed(title="Configuration imported", color=discord.Color.green())
+        embed.add_field(
+            name="Result",
+            value=(f"• {len(sanitized['timers'])} timers\n"
+                   f"• Voice: {tts.get('voice_name', DEFAULT_VOICE)}\n"
+                   f"• Speed: {tts.get('speed', DEFAULT_SPEED)}x · Pitch: {tts.get('pitch', DEFAULT_PITCH)}x\n"
+                   f"• Volume: {round(float(sanitized['settings'].get('volume', 1.0)) * 100)}%\n"
+                   + ("• Merged with existing settings" if merge else "• Replaced existing settings")),
+            inline=False,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)

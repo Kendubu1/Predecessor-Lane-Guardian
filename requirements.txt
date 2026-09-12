@@ -1,6 +1,13 @@
-discord.py[voice]
-edge-tts
-ffmpeg-python
-PyNaCl
-python-dotenv
-aiohttp>=3.8.0
+# Discord library. 2.7+ is REQUIRED: it adds the DAVE end-to-end voice
+# encryption protocol that Discord made mandatory on 2026-03-02. Older
+# versions connect to a voice channel and are kicked immediately (close 4017).
+discord.py[voice]>=2.7.1,<3
+# DAVE protocol bindings used by discord.py for voice. Not pulled in by the
+# [voice] extra, so it must be listed explicitly.
+davey>=0.1.6
+# Voice encryption (Discord voice transport)
+PyNaCl>=1.5.0
+# Microsoft neural TTS voices
+edge-tts>=7.2.0
+python-dotenv>=1.0.0
+aiohttp>=3.9.0
