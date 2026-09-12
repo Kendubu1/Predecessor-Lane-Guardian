@@ -109,6 +109,15 @@ Create a container from `ghcr.io/kendubu1/predecessor-lane-guardian:latest` with
 | `VOICE_INACTIVITY_TIMEOUT` | `300` | Seconds of silence before leaving voice when no timer runs |
 | `OPUS_LIB` | auto | Opus library name/path if auto-detection fails |
 
+## Azure App Service (current hosting) ☁️
+
+`.github/workflows/main_discordbotpred.yml` still deploys `main` to the `discordbotpred` App Service. Two things App Service needs that the code cannot provide on its own:
+
+- **System packages**: FFmpeg and libopus are not in the default Python image. Set the App Service **Startup Command** to `bash startup.sh`, which installs them if missing and then starts the bot.
+- **Config persistence**: `server_configs.json` is written next to the code by default and is lost on redeploy. Set the app setting `CONFIG_PATH=/home/data/server_configs.json` (`/home` is persistent storage on App Service).
+
+The bot answers on the `PORT` App Service assigns, so the container start-up ping succeeds.
+
 ## Running without Docker 💻
 
 Requirements: Python 3.11+ (3.12 recommended), FFmpeg and libopus on the PATH (`sudo apt install ffmpeg libopus0` on Debian/Ubuntu).

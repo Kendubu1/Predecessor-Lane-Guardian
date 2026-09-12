@@ -107,7 +107,8 @@ class PredecessorBot(commands.Bot):
                 for subcmd in command.commands:
                     logger.info(f"  /{command.name} {subcmd.name} - {subcmd.description}")
 
-        health_port = int(os.getenv('HEALTH_PORT', '8080'))
+        # Azure App Service sets PORT and expects something to answer on it.
+        health_port = int(os.getenv('HEALTH_PORT') or os.getenv('PORT') or '8080')
         self.health_check = HealthCheck(self, port=health_port)
         try:
             await self.health_check.start()

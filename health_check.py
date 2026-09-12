@@ -13,9 +13,13 @@ class HealthCheck:
         self.port = port
         self.start_time = datetime.now(timezone.utc)
         self.app = web.Application()
-        self.app.router.add_get('/', self.handle_health_check)
+        self.app.router.add_get('/', self.handle_liveness)
         self.app.router.add_get('/health', self.handle_health_check)
         self._runner: web.AppRunner | None = None
+
+    async def handle_liveness(self, request: web.Request) -> web.Response:
+        """Always 200: the process is up. Used by platform pings (e.g. Azure)."""
+        return web.json_response({'status': 'alive', 'bot_connected': self.bot.is_ready()})
 
     async def handle_health_check(self, request: web.Request) -> web.Response:
         """Return 200 when the bot is connected to Discord, 503 otherwise."""
